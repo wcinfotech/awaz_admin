@@ -1,0 +1,859 @@
+import { useState, useEffect } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import api from "@/lib/api";
+import { AdminLayout } from "@/components/layout/AdminLayout";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Button } from "@/components/ui/button";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar } from "@/components/ui/calendar";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { toast } from "sonner";
+import {
+    ArrowLeft,
+    Upload,
+    Clock,
+    X,
+    Trash2,
+    Plus,
+    Heart,
+    Share2,
+    Eye,
+    MessageCircle,
+} from "lucide-react";
+import { format } from "date-fns";
+import { cn } from "@/lib/utils";
+
+
+export default function EventDetailPage() {
+    const navigate = useNavigate();
+    const { id } = useParams();
+    console.log('🆔 useParams id:', id);
+
+    // Fetch categories from database
+    const { data: categoriesData } = useQuery({
+        queryKey: ['event-categories', 'incident'],
+        queryFn: async () => {
+            const response = await api.get('/admin/v1/event-category/list', {
+                params: { postType: 'incident' }
+            });
+            return response.data;
+        },
+        staleTime: 60000, // Cache for 1 minute
+    });
+
+    // Fetch event details from API
+    const { data: eventDetailsData, isLoading: isLoadingEvent } = useQuery({
+        queryKey: ['event-detail', id],
+        queryFn: async () => {
+            console.log('🚦 Query function running, id:', id);
+            if (!id) return null;
+            const response = await api.get(`/admin/v1/event-post/incident/${id}`);
+            console.log('🔍 Event API Response:', response.data);
+            // Extract safely: const eventData = res.data?.data || res.data;
+            const eventData = response.data?.data || response.data;
+            return eventData;
+        },
+        enabled: !!id,
+        staleTime: 30000,
+    });
+
+    const initialData = {
+        id: "",
+        user: "",
+        avatar: "",
+        title: "",
+        description: "",
+        location: "",
+        postCategory: "",
+        startDate: new Date(),
+        hashtag: "",
+        latitude: "",
+        longitude: "",
+        media: "",
+        mediaType: "image" as "video" | "image",
+        thumbnail: "",
+        stats: { likes: 0, shares: 0, views: 0, comments: 0 },
+        adminCreatedPostId: "",
+        attachmentId: "",
+        timeline: [],
+    };
+
+    // Store in single state: const [event, setEvent] = useState<Event | null>(null);
+    const [event, setEvent] = useState<any>(null);
+    const [isUpdating, setIsUpdating] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
+    const [selectedCategoryId, setSelectedCategoryId] = useState<string>("");
+
+    // Update event state when API data arrives
+    useEffect(() => {
+        if (eventDetailsData) {
+            setEvent(eventDetailsData);
+        }
+    }, [eventDetailsData]);
+
+    // Upload Media Modal State
+    const [isUploadMediaOpen, setIsUploadMediaOpen] = useState(false);
+    const [uploadedMedia, setUploadedMedia] = useState<File | null>(null);
+    const [uploadedMediaPreview, setUploadedMediaPreview] = useState<string | null>(null);
+    const [isUploading, setIsUploading] = useState(false);
+
+    // Add Timeline Modal State
+    const [isAddTimelineOpen, setIsAddTimelineOpen] = useState(false);
+    const [newTimelineData, setNewTimelineData] = useState({
+        description: "",
+        startDate: new Date(),
+    });
+    const [timelineMedia, setTimelineMedia] = useState<File | null>(null);
+    const [timelineMediaPreview, setTimelineMediaPreview] = useState<string | null>(null);
+
+    // Media Preview Popup State
+    const [isMediaPreviewOpen, setIsMediaPreviewOpen] = useState(false);
+
+    // Upload Media Handlers
+    const handleMediaFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0] || null;
+        if (file) {
+            setUploadedMedia(file);
+            const url = URL.createObjectURL(file);
+            setUploadedMediaPreview(url);
+        }
+        e.target.value = "";
+    };
+
+    const handleUploadMedia = async () => {
+        if (!uploadedMedia) {
+            toast.error("Please select a file to upload");
+            return;
+        }
+        setIsUploading(true);
+        try {
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+            // Save the preview URL to eventData - in real app this would be the server URL
+            // Don't revoke the URL since we need it for display
+            const mediaUrl = uploadedMediaPreview || "";
+            const isVideo = uploadedMedia.type.startsWith('video/');
+            setEventData((prev) => ({
+                ...prev,
+                media: mediaUrl,
+                mediaType: isVideo ? 'video' : 'image'
+            }));
+            toast.success("Media uploaded successfully!", { description: uploadedMedia.name });
+            setIsUploadMediaOpen(false);
+            setUploadedMedia(null);
+            // Don't revoke - we're using this URL for display
+            setUploadedMediaPreview(null);
+        } catch (err) {
+            toast.error("Failed to upload media");
+        } finally {
+            setIsUploading(false);
+        }
+    };
+
+    // Timeline Media Handler
+    const handleTimelineMediaChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0] || null;
+        if (file) {
+            setTimelineMedia(file);
+            const url = URL.createObjectURL(file);
+            setTimelineMediaPreview(url);
+        }
+        e.target.value = "";
+    };
+
+    const handleAddTimelineSubmit = () => {
+        const newTimeline = {
+            id: `tl-${Date.now()}`,
+            user: "Awaaz",
+            avatar: "",
+            description: newTimelineData.description,
+            startDate: newTimelineData.startDate,
+            media: timelineMediaPreview || "/awaz_logo.png",
+        };
+        setEventData((prev) => ({
+            ...prev,
+            timeline: [...prev.timeline, newTimeline],
+        }));
+        toast.success("Timeline entry added!");
+        setIsAddTimelineOpen(false);
+        setNewTimelineData({ description: "", startDate: new Date() });
+        setTimelineMedia(null);
+        if (timelineMediaPreview) URL.revokeObjectURL(timelineMediaPreview);
+        setTimelineMediaPreview(null);
+    };
+
+    const handleUpdate = async () => {
+        setIsUpdating(true);
+        try {
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+            toast.success("Event updated successfully!");
+        } catch (err) {
+            toast.error("Failed to update event");
+        } finally {
+            setIsUpdating(false);
+        }
+    };
+
+    const handleDelete = async () => {
+        setIsDeleting(true);
+        try {
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+            toast.success("Event deleted successfully!");
+            navigate("/");
+        } catch (err) {
+            toast.error("Failed to delete event");
+        } finally {
+            setIsDeleting(false);
+        }
+    };
+
+    const handleRemoveMedia = () => {
+        setEventData({ ...eventData, media: "" });
+    };
+
+    const handleAddTimeline = () => {
+        const newTimeline = {
+            id: `tl-${Date.now()}`,
+            user: "Awaaz",
+            avatar: "",
+            description: "",
+            startDate: new Date(),
+            media: "",
+        };
+        setEventData({
+            ...eventData,
+            timeline: [...eventData.timeline, newTimeline],
+        });
+        toast.success("Timeline entry added");
+    };
+
+    const handleDeleteTimeline = (timelineId: string) => {
+        setEventData({
+            ...eventData,
+            timeline: eventData.timeline.filter((t) => t.id !== timelineId),
+        });
+        toast.success("Timeline entry deleted");
+    };
+
+    return (
+        <AdminLayout title="Event Detail">
+            {isLoadingEvent ? (
+                <div className="flex items-center justify-center py-24">
+                    <div className="h-12 w-12 animate-spin rounded-full border-4 border-white/20 border-t-white" />
+                </div>
+            ) : (
+                <>
+                    <div className="space-y-6 text-foreground">{/* Header */}
+                        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="flex items-center gap-4">
+                                <Button
+                                    variant="outline"
+                                    size="icon"
+                                    className="h-10 w-10 rounded-full border-white/20"
+                                    onClick={() => navigate("/")}
+                                >
+                                    <ArrowLeft className="h-5 w-5" />
+                                </Button>
+                                <div>
+                                    <h1 className="text-2xl font-bold text-white">Attach File</h1>
+                                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                        <span>Event</span>
+                                        <span>›</span>
+                                        <span className="text-emerald-400">
+                                            {eventData.title || "Loading..."}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="flex gap-3">
+                                <Button
+                                    className="bg-emerald-500 hover:bg-emerald-600 text-white"
+                                    onClick={() => setIsUploadMediaOpen(true)}
+                                >
+                                    <Upload className="h-4 w-4 mr-2" />
+                                    Upload Media
+                                </Button>
+                                <Button
+                                    className="bg-blue-500 hover:bg-blue-600 text-white"
+                                    onClick={() => setIsAddTimelineOpen(true)}
+                                >
+                                    <Plus className="h-4 w-4 mr-2" />
+                                    Add Timeline
+                                </Button>
+                            </div>
+                        </div>
+
+                        {/* Main Content */}
+                        <Card className="border-white/10 bg-card">
+                            <CardContent className="space-y-6 p-6">
+                                {/* User Info */}
+                                <div className="flex flex-col gap-1">
+                                    <div className="flex items-center gap-3">
+                                        <Avatar className="h-10 w-10">
+                                            <AvatarImage src={eventData.avatar} alt={eventData.user} />
+                                            <AvatarFallback className="bg-blue-600 text-white text-sm">
+                                                {eventData.user.slice(0, 2).toUpperCase()}
+                                            </AvatarFallback>
+                                        </Avatar>
+                                        <span className="font-medium text-white">{eventData.user}</span>
+                                    </div>
+                                    {eventData.adminCreatedPostId && (
+                                        <div className="text-white text-sm">
+                                            <b>Admin Created Post ID:</b> {eventData.adminCreatedPostId}
+                                        </div>
+                                    )}
+                                    {eventData.attachmentId && (
+                                        <div className="text-white text-sm">
+                                            <b>Attachment ID:</b> {eventData.attachmentId}
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Media Preview */}
+                                {eventData.media && (
+                                    <div className="space-y-2">
+                                        <Label className="text-white">Attached Media</Label>
+                                        <div className="relative inline-block">
+                                            <div className="relative rounded-xl bg-gray-900 border border-white/10 overflow-hidden group">
+                                                {/* Check if it's a video or image */}
+                                                {eventData.media.match(/\.(mp4|mov|webm|avi)$/i) || eventData.mediaType === 'video' ? (
+                                                    <video
+                                                        src={eventData.media}
+                                                        className="max-w-md max-h-64 object-contain cursor-pointer"
+                                                        poster={eventData.thumbnail}
+                                                        onClick={() => setIsMediaPreviewOpen(true)}
+                                                    />
+                                                ) : (
+                                                    <img
+                                                        src={eventData.media}
+                                                        alt="Event media"
+                                                        className="max-w-md max-h-64 object-contain cursor-pointer hover:opacity-90 transition-opacity"
+                                                        onClick={() => setIsMediaPreviewOpen(true)}
+                                                    />
+                                                )}
+                                                {/* Overlay actions on hover */}
+                                                <div className="absolute top-2 right-2 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    <button
+                                                        onClick={() => setIsMediaPreviewOpen(true)}
+                                                        className="flex h-8 w-8 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80"
+                                                        title="View full size"
+                                                    >
+                                                        <Eye className="h-4 w-4" />
+                                                    </button>
+                                                    <button
+                                                        onClick={handleRemoveMedia}
+                                                        className="flex h-8 w-8 items-center justify-center rounded-full bg-red-500/80 text-white hover:bg-red-500"
+                                                        title="Remove media"
+                                                    >
+                                                        <X className="h-4 w-4" />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            {/* File info */}
+                                            <div className="mt-2 flex items-center gap-2 text-sm text-white/60">
+                                                <span>Click to view full size</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <button className="absolute -top-1 -right-1 flex h-6 w-6 items-center justify-center rounded-full bg-gray-700 text-white hover:bg-gray-600">
+                                        <X className="h-4 w-4" />
+                                    </button>
+                                </div>
+
+                            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                <div className="space-y-2">
+                                    <Label className="text-white">Description</Label>
+                                    <Input
+                                        placeholder="Enter Description"
+                                        className="h-12 bg-white/5 border-white/10 text-white"
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <Label className="text-white">Start Date</Label>
+                                    <Popover>
+                                        <PopoverTrigger asChild>
+                                            <Button
+                                                variant="outline"
+                                                className="h-12 w-full justify-between bg-white/5 border-white/10 text-white hover:bg-white/10"
+                                            >
+                                                <span>{format(eventData.startDate, "dd/MM/yyyy hh:mm a")}</span>
+                                                <Clock className="h-4 w-4" />
+                                            </Button>
+                                        </PopoverTrigger>
+                                        <PopoverContent className="w-auto p-0" align="start">
+                                            <Calendar
+                                                mode="single"
+                                                selected={eventData.startDate}
+                                                onSelect={(date) => date && setEventData({ ...eventData, startDate: date })}
+                                                initialFocus
+                                            />
+                                        </PopoverContent>
+                                    </Popover>
+                                </div>
+                            </div>
+
+                            {/* Title & Hashtag */}
+                            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                <div className="space-y-2">
+                                    <Label className="text-white">Title</Label>
+                                    <Input
+                                        value={eventData.title}
+                                        onChange={(e) => setEventData({ ...eventData, title: e.target.value })}
+                                        className="h-12 bg-white/5 border-white/10 text-white"
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <Label className="text-white">Hashtag</Label>
+                                    <Input
+                                        value={eventData.hashtag}
+                                        onChange={(e) => setEventData({ ...eventData, hashtag: e.target.value })}
+                                        placeholder="#test, #sdvgfdvcx"
+                                        className="h-12 bg-white/5 border-white/10 text-white"
+                                    />
+                                </div>
+                            </div>
+
+                            {/* Location */}
+                            <div className="space-y-2">
+                                <Label className="text-white">Location</Label>
+                                <Input
+                                    value={eventData.location}
+                                    onChange={(e) => setEventData({ ...eventData, location: e.target.value })}
+                                    className="h-12 bg-white/5 border-white/10 text-white"
+                                />
+                            </div>
+
+                            {/* Description */}
+                            <div className="space-y-2">
+                                <Label className="text-white">Description</Label>
+                                <Textarea
+                                    value={eventData.description}
+                                    onChange={(e) => setEventData({ ...eventData, description: e.target.value })}
+                                    className="min-h-[100px] bg-white/5 border-white/10 text-white resize-none"
+                                />
+                            </div>
+
+                            {/* Latitude & Longitude */}
+                            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                <div className="space-y-2">
+                                    <Label className="text-white">Latitude</Label>
+                                    <Input
+                                        value={event?.latitude || ""}
+                                        disabled
+                                        className="h-12 bg-white/5 border-white/10 text-white"
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <Label className="text-white">Longitude</Label>
+                                    <Input
+                                        value={event?.longitude || ""}
+                                        disabled
+                                        className="h-12 bg-white/5 border-white/10 text-white"
+                                    />
+                                </div>
+                            </div>
+
+                            {/* Stats - Read Only */}
+                            <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+                                <div className="space-y-2">
+                                    <Label className="text-white flex items-center gap-2">
+                                        <Heart className="h-4 w-4" /> Like
+                                    </Label>
+                                    <Input
+                                        value={eventData.stats.likes}
+                                        readOnly
+                                        className="h-12 bg-white/5 border-white/10 text-white"
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <Label className="text-white flex items-center gap-2">
+                                        <Share2 className="h-4 w-4" /> Share
+                                    </Label>
+                                    <Input
+                                        value={eventData.stats.shares}
+                                        readOnly
+                                        className="h-12 bg-white/5 border-white/10 text-white"
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <Label className="text-white flex items-center gap-2">
+                                        <Eye className="h-4 w-4" /> View
+                                    </Label>
+                                    <Input
+                                        value={eventData.stats.views}
+                                        readOnly
+                                        className="h-12 bg-white/5 border-white/10 text-white"
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <Label className="text-white flex items-center gap-2">
+                                        <MessageCircle className="h-4 w-4" /> Comment
+                                    </Label>
+                                    <Input
+                                        value={eventData.stats.comments}
+                                        readOnly
+                                        className="h-12 bg-white/5 border-white/10 text-white"
+                                    />
+                                </div>
+                            </div>
+                        </CardContent>
+                    </Card>
+
+                    {/* Timeline Section */}
+                    {eventData.timeline.map((timeline) => (
+                        <Card key={timeline.id} className="border-white/10 bg-card">
+                            <CardContent className="space-y-6 p-6">
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-3">
+                                        <Avatar className="h-10 w-10">
+                                            <AvatarImage src="/awaz_logo.png" alt="Awaaz" />
+                                            <AvatarFallback className="bg-gray-700">
+                                                <img src="/awaz_logo.png" alt="Awaaz" className="h-6 w-6" />
+                                            </AvatarFallback>
+                                        </Avatar>
+                                        <span className="font-medium text-white">Awaaz</span>
+                                    </div>
+                                    <button
+                                        onClick={() => handleDeleteTimeline(timeline.id)}
+                                        className="flex items-center gap-1 text-red-400 hover:text-red-300 text-sm"
+                                    >
+                                        <Trash2 className="h-4 w-4" />
+                                        Delete
+                                    </button>
+                                </div>
+
+                                {/* Timeline Media */}
+                                <div className="relative inline-block">
+                                    <div className="relative h-24 w-24 rounded-full bg-gray-800 border-4 border-gray-600 flex items-center justify-center overflow-hidden">
+                                        <img
+                                            src="/awaz_logo.png"
+                                            alt="Timeline media"
+                                            className="h-16 w-16 object-contain"
+                                        />
+                                    </div>
+                                    <button className="absolute -top-1 -right-1 flex h-6 w-6 items-center justify-center rounded-full bg-gray-700 text-white hover:bg-gray-600">
+                                        <X className="h-4 w-4" />
+                                    </button>
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                    <div className="space-y-2">
+                                        <Label className="text-white">Description</Label>
+                                        <Input
+                                            placeholder="Enter Description"
+                                            className="h-12 bg-white/5 border-white/10 text-white"
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label className="text-white">Start Date</Label>
+                                        <Popover>
+                                            <PopoverTrigger asChild>
+                                                <Button
+                                                    variant="outline"
+                                                    className="h-12 w-full justify-between bg-white/5 border-white/10 text-white hover:bg-white/10"
+                                                >
+                                                    <span>{format(timeline.startDate, "dd/MM/yyyy hh:mm a")}</span>
+                                                    <Clock className="h-4 w-4" />
+                                                </Button>
+                                            </PopoverTrigger>
+                                            <PopoverContent className="w-auto p-0" align="start">
+                                                <Calendar
+                                                    mode="single"
+                                                    selected={timeline.startDate}
+                                                    initialFocus
+                                                />
+                                            </PopoverContent>
+                                        </Popover>
+                                    </div>
+                                </div>
+                            </CardContent>
+                        </Card>
+                    ))}
+
+                    {/* Footer Actions */}
+                    <div className="flex justify-end gap-4 pb-6">
+                        <Button
+                            variant="destructive"
+                            className="h-12 px-8 bg-red-500 hover:bg-red-600"
+                            onClick={handleDelete}
+                            disabled={isDeleting}
+                        >
+                            {isDeleting ? (
+                                <div className="h-5 w-5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                            ) : (
+                                "Delete"
+                            )}
+                        </Button>
+                        <Button
+                            className="h-12 px-8 bg-gray-600 hover:bg-gray-500"
+                            onClick={handleUpdate}
+                            disabled={isUpdating}
+                        >
+                            {isUpdating ? (
+                                <div className="h-5 w-5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                            ) : (
+                                "Update"
+                            )}
+                        </Button>
+                    </div>
+                </div>
+
+            {/* Upload Media Dialog */}
+            <Dialog open={isUploadMediaOpen} onOpenChange={setIsUploadMediaOpen}>
+                <DialogContent className="max-w-md bg-[#1a1a1f] border-white/10">
+                    <DialogHeader>
+                        <DialogTitle className="text-xl font-semibold text-white">Upload Media</DialogTitle>
+                    </DialogHeader>
+
+                    <div className="space-y-5 py-4">
+                        {/* Upload Area */}
+                        <div className="relative">
+                            {uploadedMediaPreview ? (
+                                <div className="relative h-48 rounded-xl border border-white/20 overflow-hidden group">
+                                    {uploadedMedia?.type.startsWith('video/') ? (
+                                        <video
+                                            src={uploadedMediaPreview}
+                                            className="w-full h-full object-cover"
+                                            controls
+                                        />
+                                    ) : (
+                                        <img
+                                            src={uploadedMediaPreview}
+                                            alt="Preview"
+                                            className="w-full h-full object-cover"
+                                        />
+                                    )}
+                                    <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                                        <label className="cursor-pointer p-3 rounded-full bg-white/20 hover:bg-white/30 transition-colors">
+                                            <Upload className="h-5 w-5 text-white" />
+                                            <input
+                                                type="file"
+                                                accept="video/*,image/*"
+                                                className="hidden"
+                                                onChange={handleMediaFileChange}
+                                            />
+                                        </label>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setUploadedMedia(null);
+                                                if (uploadedMediaPreview) URL.revokeObjectURL(uploadedMediaPreview);
+                                                setUploadedMediaPreview(null);
+                                            }}
+                                            className="p-3 rounded-full bg-red-500/80 hover:bg-red-500 transition-colors"
+                                        >
+                                            <X className="h-5 w-5 text-white" />
+                                        </button>
+                                    </div>
+                                    <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-3 py-2">
+                                        <span className="text-sm text-white truncate block">{uploadedMedia?.name}</span>
+                                    </div>
+                                </div>
+                            ) : (
+                                <label className="flex h-48 cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-white/20 bg-white/5 transition-colors hover:border-white/40 hover:bg-white/10">
+                                    <Upload className="mb-3 h-10 w-10 text-white/60" />
+                                    <span className="text-base text-white/60">Click to upload Video or Image</span>
+                                    <span className="text-sm text-white/40 mt-1">Supports: MP4, MOV, JPG, PNG</span>
+                                    <input
+                                        type="file"
+                                        accept="video/*,image/*"
+                                        className="hidden"
+                                        onChange={handleMediaFileChange}
+                                    />
+                                </label>
+                            )}
+                        </div>
+
+                        {/* Actions */}
+                        <div className="flex gap-3">
+                            <Button
+                                variant="outline"
+                                className="flex-1"
+                                onClick={() => {
+                                    setIsUploadMediaOpen(false);
+                                    setUploadedMedia(null);
+                                    if (uploadedMediaPreview) URL.revokeObjectURL(uploadedMediaPreview);
+                                    setUploadedMediaPreview(null);
+                                }}
+                            >
+                                Cancel
+                            </Button>
+                            <Button
+                                className="flex-1 bg-emerald-500 hover:bg-emerald-600"
+                                onClick={handleUploadMedia}
+                                disabled={!uploadedMedia || isUploading}
+                            >
+                                {isUploading ? (
+                                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                                ) : (
+                                    "Upload"
+                                )}
+                            </Button>
+                        </div>
+                    </div>
+                </DialogContent>
+            </Dialog>
+
+            {/* Add Timeline Dialog */}
+            <Dialog open={isAddTimelineOpen} onOpenChange={setIsAddTimelineOpen}>
+                <DialogContent className="max-w-lg bg-[#1a1a1f] border-white/10">
+                    <DialogHeader>
+                        <DialogTitle className="text-xl font-semibold text-white">Add Timeline Entry</DialogTitle>
+                    </DialogHeader>
+
+                    <div className="space-y-5 py-4">
+                        {/* Media Upload */}
+                        <div className="space-y-2">
+                            <Label className="text-white">Attach Media (Optional)</Label>
+                            <div className="relative">
+                                {timelineMediaPreview ? (
+                                    <div className="relative h-32 rounded-xl border border-white/20 overflow-hidden group">
+                                        {timelineMedia?.type.startsWith('video/') ? (
+                                            <video
+                                                src={timelineMediaPreview}
+                                                className="w-full h-full object-cover"
+                                            />
+                                        ) : (
+                                            <img
+                                                src={timelineMediaPreview}
+                                                alt="Preview"
+                                                className="w-full h-full object-cover"
+                                            />
+                                        )}
+                                        <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setTimelineMedia(null);
+                                                    if (timelineMediaPreview) URL.revokeObjectURL(timelineMediaPreview);
+                                                    setTimelineMediaPreview(null);
+                                                }}
+                                                className="p-2 rounded-full bg-red-500/80 hover:bg-red-500 transition-colors"
+                                            >
+                                                <X className="h-4 w-4 text-white" />
+                                            </button>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <label className="flex h-24 cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-white/20 bg-white/5 transition-colors hover:border-white/40 hover:bg-white/10">
+                                        <Upload className="mb-2 h-5 w-5 text-white/60" />
+                                        <span className="text-sm text-white/60">Attach Video/Image</span>
+                                        <input
+                                            type="file"
+                                            accept="video/*,image/*"
+                                            className="hidden"
+                                            onChange={handleTimelineMediaChange}
+                                        />
+                                    </label>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Description */}
+                        <div className="space-y-2">
+                            <Label className="text-white">Description</Label>
+                            <Textarea
+                                placeholder="Enter timeline description..."
+                                value={newTimelineData.description}
+                                onChange={(e) => setNewTimelineData({ ...newTimelineData, description: e.target.value })}
+                                className="min-h-[80px] bg-white/5 border-white/10 text-white placeholder:text-white/40"
+                            />
+                        </div>
+
+                        {/* Start Date */}
+                        <div className="space-y-2">
+                            <Label className="text-white">Start Date</Label>
+                            <Popover>
+                                <PopoverTrigger asChild>
+                                    <Button
+                                        variant="outline"
+                                        className="h-11 w-full justify-between bg-white/5 border-white/10 text-white hover:bg-white/10"
+                                    >
+                                        <span>{format(newTimelineData.startDate, "dd/MM/yyyy hh:mm a")}</span>
+                                        <Clock className="h-4 w-4" />
+                                    </Button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-auto p-0" align="start">
+                                    <Calendar
+                                        mode="single"
+                                        selected={newTimelineData.startDate}
+                                        onSelect={(date) => date && setNewTimelineData({ ...newTimelineData, startDate: date })}
+                                        initialFocus
+                                    />
+                                </PopoverContent>
+                            </Popover>
+                        </div>
+
+                        {/* Actions */}
+                        <div className="flex gap-3">
+                            <Button
+                                variant="outline"
+                                className="flex-1"
+                                onClick={() => {
+                                    setIsAddTimelineOpen(false);
+                                    setNewTimelineData({ description: "", startDate: new Date() });
+                                    setTimelineMedia(null);
+                                    if (timelineMediaPreview) URL.revokeObjectURL(timelineMediaPreview);
+                                    setTimelineMediaPreview(null);
+                                }}
+                            >
+                                Cancel
+                            </Button>
+                            <Button
+                                className="flex-1 bg-blue-500 hover:bg-blue-600"
+                                onClick={handleAddTimelineSubmit}
+                            >
+                                Add Timeline
+                            </Button>
+                        </div>
+                    </div>
+                </DialogContent>
+            </Dialog>
+
+            {/* Media Preview Popup */}
+            <Dialog open={isMediaPreviewOpen} onOpenChange={setIsMediaPreviewOpen}>
+                <DialogContent className="max-w-lg p-6 bg-[#1a1a1f] border-white/10">
+                    <DialogHeader>
+                        <DialogTitle className="text-white">Media Preview</DialogTitle>
+                    </DialogHeader>
+                    <div className="relative">
+                        {/* Media content - same size as attach file section */}
+                        {eventData.media && (
+                            <div className="rounded-xl bg-gray-900 border border-white/10 overflow-hidden">
+                                {eventData.media.match(/\.(mp4|mov|webm|avi)$/i) || eventData.mediaType === 'video' ? (
+                                    <video
+                                        src={eventData.media}
+                                        className="max-w-md max-h-64 object-contain w-full"
+                                        controls
+                                        autoPlay
+                                        poster={eventData.thumbnail}
+                                    />
+                                ) : (
+                                    <img
+                                        src={eventData.media}
+                                        alt="Event media"
+                                        className="max-w-md max-h-64 object-contain w-full"
+                                    />
+                                )}
+                            </div>
+                        )}
+
+                        {/* Media info */}
+                        <div className="mt-4 space-y-1">
+                            <p className="text-white font-medium">{eventData.title}</p>
+                            <p className="text-white/60 text-sm">Uploaded by {eventData.user}</p>
+                        </div>
+                    </div>
+                </DialogContent>
+            </Dialog>
+        </>
+    )
+}
+        </AdminLayout >
+    );
+}

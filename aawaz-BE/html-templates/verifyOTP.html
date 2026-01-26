@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>OTP Verification</title>
+    <style>
+      body {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background-color: #181A20;
+        color: #fff;
+        margin: 0;
+        padding: 40px 0;
+      }
+      .container {
+        background-color: #23262F;
+        padding: 32px 40px;
+        border-radius: 14px;
+        max-width: 420px;
+        margin: auto;
+        box-shadow: 0 4px 24px rgba(0,0,0,0.25);
+      }
+      .header {
+        text-align: center;
+        color: #fff;
+        font-size: 26px;
+        margin-bottom: 12px;
+        letter-spacing: 1px;
+      }
+      .greeting {
+        font-size: 16px;
+        margin: 18px 0 10px 0;
+        color: #b0b3b8;
+        text-align: center;
+      }
+      .otp-box {
+        background-color: #181A20;
+        padding: 22px 0;
+        border-radius: 7px;
+        text-align: center;
+        font-size: 28px;
+        font-weight: bold;
+        color: #fff;
+        margin: 32px 0 24px 0;
+        letter-spacing: 6px;
+        box-shadow: 0 2px 8px rgba(45,145,140,0.08);
+        cursor: pointer;
+        transition: background 0.2s;
+      }
+      .otp-box.copied {
+        background-color: #2d918c;
+        color: #fff;
+        transition: background 0.2s;
+      }
+      .info-text {
+        color: #b0b3b8;
+        text-align: center;
+        font-size: 15px;
+        margin-bottom: 18px;
+      }
+      .footer {
+        text-align: center;
+        font-size: 13px;
+        color: #666;
+        margin-top: 30px;
+      }
+      @media (max-width: 600px) {
+        .container {
+          padding: 18px 8px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h2 class="header">OTP Verification</h2>
+      <p class="greeting">Hello,</p>
+      <p class="info-text">
+        To proceed with your request securely, please use the One-Time Password (OTP) provided below.
+      </p>
+      <div class="otp-box" id="otpBox">{{otp}}</div>
+      <p class="info-text">
+        This OTP is valid for the next 2 minutes. Please do not share it with anyone.
+      </p>
+    </div>
+    <script>
+      const otpBox = document.getElementById('otpBox');
+      otpBox.addEventListener('click', function() {
+        const otp = otpBox.textContent.trim();
+        navigator.clipboard.writeText(otp);
+        otpBox.classList.add('copied');
+        const original = otpBox.textContent;
+        otpBox.textContent = 'Copied!';
+        setTimeout(() => {
+          otpBox.textContent = original;
+          otpBox.classList.remove('copied');
+        }, 1200);
+      });
+    </script>
+  </body>
+</html>
