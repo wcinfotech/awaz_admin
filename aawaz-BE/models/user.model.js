@@ -100,6 +100,14 @@ const schema = new mongoose.Schema(
         distance: { type: Number, default: 0 },
       },
     ],
+    pushToken: {
+      type: String,
+      default: null,
+    },
+    deviceId: {
+      type: String,
+      default: null,
+    },
     isBlocked: {
       type: Boolean,
       default: false,

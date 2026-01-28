@@ -8,8 +8,15 @@ const router = Router();
 router.use(adminVerifyToken);
 
 /**
- * @route   POST /admin/v1/notification/send-global
+ * @route   POST /admin/v1/notification/global
  * @desc    Send global notification to all users
+ * @access  Admin
+ */
+router.post("/global", adminNotificationController.sendGlobalNotification);
+
+/**
+ * @route   POST /admin/v1/notification/send-global
+ * @desc    Send global notification to all users (legacy)
  * @access  Admin
  */
 router.post("/send-global", adminNotificationController.sendGlobalNotification);

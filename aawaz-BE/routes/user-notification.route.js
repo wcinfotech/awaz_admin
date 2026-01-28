@@ -8,6 +8,20 @@ const router = Router();
 router.use(verifyToken);
 
 /**
+ * @route   POST /api/v1/user/device-token
+ * @desc    Add or update device token
+ * @access  Private
+ */
+router.post("/device-token", userNotificationController.manageDeviceToken);
+
+/**
+ * @route   POST /api/v1/user/fcm-token
+ * @desc    Add or update FCM token (legacy)
+ * @access  Private
+ */
+router.post("/fcm-token", userNotificationController.manageFcmToken);
+
+/**
  * @route   GET /api/v1/user/notifications
  * @desc    Get user notifications inbox
  * @access  Private
@@ -41,13 +55,6 @@ router.put("/notifications/mark-all-read", userNotificationController.markAllNot
  * @access  Private
  */
 router.delete("/notification/:notificationId", userNotificationController.deleteNotification);
-
-/**
- * @route   POST /api/v1/user/fcm-token
- * @desc    Add or update FCM token
- * @access  Private
- */
-router.post("/fcm-token", userNotificationController.manageFcmToken);
 
 /**
  * @route   DELETE /api/v1/user/fcm-token

@@ -19,6 +19,8 @@ route.post("/add", adminVerifyToken, verifyRole([enums.userRoleEnum.ADMIN, enums
 
 route.delete("/delete/:draftId", adminVerifyToken, verifyRole([enums.userRoleEnum.ADMIN, enums.userRoleEnum.OWNER]), draftAdminEventPostController.deleteDraftAdminEventPost);
 
+route.delete("/:draftId/simple-delete", adminVerifyToken, verifyRole([enums.userRoleEnum.ADMIN, enums.userRoleEnum.OWNER]), draftAdminEventPostController.simpleDeleteDraft);
+
 route.get("/admin-drafts", adminVerifyToken, verifyRole([enums.userRoleEnum.ADMIN, enums.userRoleEnum.OWNER]), draftAdminEventPostController.getDraftAdminEventPost);
 
 export default route;

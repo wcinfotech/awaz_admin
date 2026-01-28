@@ -4,15 +4,20 @@ import globalNotificationService from "../../services/global-notification.servic
 
 class AdminNotificationController {
     /**
-     * Send global notification to all users
+     * Send global notification - STRICT VALIDATION
      */
     async sendGlobalNotification(req, res) {
         try {
+            console.log('🎯 CONTROLLER: Starting sendGlobalNotification');
+            
             const adminId = req.admin.id;
             const { title, message, type, imageUrl, deepLink } = req.body;
 
-            // Validate required fields
+            console.log('📝 CONTROLLER: Received data:', { title, message, type, imageUrl, deepLink });
+
+            // ✅ STEP 1 – VALIDATE INPUT (MANDATORY)
             if (!title || !message || !type) {
+                console.log('❌ CONTROLLER: Validation failed - missing required fields');
                 return apiResponse({
                     res,
                     statusCode: StatusCodes.BAD_REQUEST,
@@ -24,6 +29,7 @@ class AdminNotificationController {
             // Validate notification type
             const validTypes = ['INFO', 'ALERT', 'WARNING', 'PROMOTION'];
             if (!validTypes.includes(type)) {
+                console.log('❌ CONTROLLER: Validation failed - invalid type:', type);
                 return apiResponse({
                     res,
                     statusCode: StatusCodes.BAD_REQUEST,
@@ -32,6 +38,31 @@ class AdminNotificationController {
                 });
             }
 
+            // Validate title length
+            if (title.length > 100) {
+                console.log('❌ CONTROLLER: Validation failed - title too long');
+                return apiResponse({
+                    res,
+                    statusCode: StatusCodes.BAD_REQUEST,
+                    status: false,
+                    message: "Title must be 100 characters or less",
+                });
+            }
+
+            // Validate message length
+            if (message.length > 500) {
+                console.log('❌ CONTROLLER: Validation failed - message too long');
+                return apiResponse({
+                    res,
+                    statusCode: StatusCodes.BAD_REQUEST,
+                    status: false,
+                    message: "Message must be 500 characters or less",
+                });
+            }
+
+            console.log('✅ CONTROLLER: Validation passed');
+
+            // Call service with strict pipeline
             const result = await globalNotificationService.sendGlobalNotification({
                 title,
                 message,
@@ -39,6 +70,8 @@ class AdminNotificationController {
                 imageUrl: imageUrl || null,
                 deepLink: deepLink || null
             }, adminId);
+
+            console.log('✅ CONTROLLER: Service completed successfully');
 
             return apiResponse({
                 res,
@@ -48,51 +81,87 @@ class AdminNotificationController {
                 data: {
                     notificationId: result._id,
                     title: result.title,
+                    message: result.message,
                     type: result.type,
-                    totalUsers: result.totalUsers,
                     status: result.status,
+                    totalUsers: result.totalUsers,
                     sentAt: result.sentAt
                 }
             });
+
         } catch (error) {
-            console.error('Send global notification error:', error);
+            console.log('❌ CONTROLLER: Error occurred:', error.message);
+            
+            // NEVER return success on error
             return apiResponse({
                 res,
-                statusCode: StatusCodes.BAD_REQUEST,
+                statusCode: StatusCodes.INTERNAL_SERVER_ERROR,
                 status: false,
-                message: error.message || "Failed to send global notification",
+                message: "Failed to send global notification",
+                error: error.message
             });
         }
     }
 
     /**
-     * Get admin notifications list
+     * Get list of admin notifications
      */
     async getAdminNotifications(req, res) {
         try {
-            const { page, limit, status, type } = req.query;
+            const { page = 1, limit = 10, status = 'all', type = 'all' } = req.query;
 
             const result = await globalNotificationService.getAdminNotifications({
-                page: page ? parseInt(page) : 1,
-                limit: limit ? parseInt(limit) : 20,
-                status: status || 'all',
-                type: type || 'all'
+                page: parseInt(page),
+                limit: parseInt(limit),
+                status,
+                type
             });
 
             return apiResponse({
                 res,
                 statusCode: StatusCodes.OK,
                 status: true,
-                message: "Admin notifications retrieved successfully",
+                message: "Notifications retrieved successfully",
                 data: result
             });
+
         } catch (error) {
-            console.error('Get admin notifications error:', error);
+            console.log('❌ CONTROLLER: Get notifications error:', error.message);
+            
             return apiResponse({
                 res,
                 statusCode: StatusCodes.INTERNAL_SERVER_ERROR,
                 status: false,
-                message: error.message || "Failed to retrieve admin notifications",
+                message: "Failed to retrieve notifications",
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Get notification statistics
+     */
+    async getNotificationStatistics(req, res) {
+        try {
+            const stats = await globalNotificationService.getNotificationStatistics();
+
+            return apiResponse({
+                res,
+                statusCode: StatusCodes.OK,
+                status: true,
+                message: "Statistics retrieved successfully",
+                data: stats
+            });
+
+        } catch (error) {
+            console.log('❌ CONTROLLER: Get statistics error:', error.message);
+            
+            return apiResponse({
+                res,
+                statusCode: StatusCodes.INTERNAL_SERVER_ERROR,
+                status: false,
+                message: "Failed to retrieve statistics",
+                error: error.message
             });
         }
     }
@@ -104,126 +173,43 @@ class AdminNotificationController {
         try {
             const { notificationId } = req.params;
 
-            const result = await globalNotificationService.getAdminNotificationDetails(notificationId);
+            if (!notificationId) {
+                return apiResponse({
+                    res,
+                    statusCode: StatusCodes.BAD_REQUEST,
+                    status: false,
+                    message: "Notification ID is required",
+                });
+            }
+
+            const notification = await globalNotificationService.getAdminNotificationDetails(notificationId);
 
             return apiResponse({
                 res,
                 statusCode: StatusCodes.OK,
                 status: true,
                 message: "Notification details retrieved successfully",
-                data: result
+                data: notification
             });
+
         } catch (error) {
-            console.error('Get notification details error:', error);
-            return apiResponse({
-                res,
-                statusCode: StatusCodes.NOT_FOUND,
-                status: false,
-                message: error.message || "Notification not found",
-            });
-        }
-    }
-
-    /**
-     * Delete admin notification
-     */
-    async deleteAdminNotification(req, res) {
-        try {
-            const adminId = req.admin.id;
-            const { notificationId } = req.params;
-
-            const result = await globalNotificationService.deleteAdminNotification(notificationId, adminId);
-
-            return apiResponse({
-                res,
-                statusCode: StatusCodes.OK,
-                status: true,
-                message: "Notification deleted successfully",
-                data: result
-            });
-        } catch (error) {
-            console.error('Delete notification error:', error);
-            return apiResponse({
-                res,
-                statusCode: StatusCodes.NOT_FOUND,
-                status: false,
-                message: error.message || "Failed to delete notification",
-            });
-        }
-    }
-
-    /**
-     * Get notification statistics
-     */
-    async getNotificationStatistics(req, res) {
-        try {
-            const { period = '30d' } = req.query;
+            console.log('❌ CONTROLLER: Get notification details error:', error.message);
             
-            // Calculate date range based on period
-            const now = new Date();
-            let startDate = new Date();
-            
-            switch (period) {
-                case '24h':
-                    startDate.setHours(now.getHours() - 24);
-                    break;
-                case '7d':
-                    startDate.setDate(now.getDate() - 7);
-                    break;
-                case '30d':
-                    startDate.setDate(now.getDate() - 30);
-                    break;
-                case '90d':
-                    startDate.setDate(now.getDate() - 90);
-                    break;
-                default:
-                    startDate.setDate(now.getDate() - 30);
+            if (error.message === 'Notification not found') {
+                return apiResponse({
+                    res,
+                    statusCode: StatusCodes.NOT_FOUND,
+                    status: false,
+                    message: "Notification not found",
+                });
             }
 
-            const result = await globalNotificationService.getAdminNotifications({
-                limit: 1000 // Get all notifications in the period
-            });
-
-            const notifications = result.notifications;
-            
-            const statistics = {
-                total: notifications.length,
-                typeBreakdown: {
-                    info: notifications.filter(n => n.type === 'INFO').length,
-                    alert: notifications.filter(n => n.type === 'ALERT').length,
-                    warning: notifications.filter(n => n.type === 'WARNING').length,
-                    promotion: notifications.filter(n => n.type === 'PROMOTION').length
-                },
-                statusBreakdown: {
-                    sent: notifications.filter(n => n.status === 'SENT').length,
-                    partialFailed: notifications.filter(n => n.status === 'PARTIAL_FAILED').length,
-                    failed: notifications.filter(n => n.status === 'FAILED').length
-                },
-                deliveryStats: {
-                    totalUsers: notifications.reduce((sum, n) => sum + n.totalUsers, 0),
-                    deliveredUsers: notifications.reduce((sum, n) => sum + n.deliveredUsers, 0),
-                    failedUsers: notifications.reduce((sum, n) => sum + n.failedUsers, 0),
-                    averageDeliveryRate: notifications.length > 0 
-                        ? (notifications.reduce((sum, n) => sum + (n.totalUsers > 0 ? (n.deliveredUsers / n.totalUsers) * 100 : 0), 0) / notifications.length).toFixed(2)
-                        : 0
-                },
-                recentNotifications: notifications.slice(0, 5)
-            };
-
-            return apiResponse({
-                res,
-                statusCode: StatusCodes.OK,
-                status: true,
-                message: "Notification statistics retrieved successfully",
-                data: statistics
-            });
-        } catch (error) {
-            console.error('Get notification statistics error:', error);
             return apiResponse({
                 res,
                 statusCode: StatusCodes.INTERNAL_SERVER_ERROR,
                 status: false,
-                message: error.message || "Failed to retrieve notification statistics",
+                message: "Failed to retrieve notification details",
+                error: error.message
             });
         }
     }
@@ -233,13 +219,72 @@ class AdminNotificationController {
      */
     async resendFailedNotification(req, res) {
         try {
-            const adminId = req.admin.id;
             const { notificationId } = req.params;
 
-            // Get the original notification
-            const notification = await globalNotificationService.getAdminNotificationDetails(notificationId);
+            if (!notificationId) {
+                return apiResponse({
+                    res,
+                    statusCode: StatusCodes.BAD_REQUEST,
+                    status: false,
+                    message: "Notification ID is required",
+                });
+            }
+
+            // For now, return not implemented
+            return apiResponse({
+                res,
+                statusCode: StatusCodes.NOT_IMPLEMENTED,
+                status: false,
+                message: "Resend functionality not yet implemented",
+            });
+
+        } catch (error) {
+            console.log('❌ CONTROLLER: Resend notification error:', error.message);
             
-            if (!notification) {
+            return apiResponse({
+                res,
+                statusCode: StatusCodes.INTERNAL_SERVER_ERROR,
+                status: false,
+                message: "Failed to resend notification",
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Delete admin notification
+     */
+    async deleteAdminNotification(req, res) {
+        try {
+            const { notificationId } = req.params;
+            const adminId = req.admin.id;
+
+            if (!notificationId) {
+                return apiResponse({
+                    res,
+                    statusCode: StatusCodes.BAD_REQUEST,
+                    status: false,
+                    message: "Notification ID is required",
+                });
+            }
+
+            const notification = await globalNotificationService.deleteAdminNotification(notificationId, adminId);
+
+            return apiResponse({
+                res,
+                statusCode: StatusCodes.OK,
+                status: true,
+                message: "Notification deleted successfully",
+                data: {
+                    notificationId: notification._id,
+                    title: notification.title
+                }
+            });
+
+        } catch (error) {
+            console.log('❌ CONTROLLER: Delete notification error:', error.message);
+            
+            if (error.message === 'Notification not found') {
                 return apiResponse({
                     res,
                     statusCode: StatusCodes.NOT_FOUND,
@@ -248,35 +293,12 @@ class AdminNotificationController {
                 });
             }
 
-            // Create new notification with same content
-            const result = await globalNotificationService.sendGlobalNotification({
-                title: notification.title,
-                message: notification.message,
-                type: notification.type,
-                imageUrl: notification.imageUrl,
-                deepLink: notification.deepLink
-            }, adminId);
-
             return apiResponse({
                 res,
-                statusCode: StatusCodes.OK,
-                status: true,
-                message: "Notification resent successfully",
-                data: {
-                    originalNotificationId: notificationId,
-                    newNotificationId: result._id,
-                    title: result.title,
-                    totalUsers: result.totalUsers,
-                    status: result.status
-                }
-            });
-        } catch (error) {
-            console.error('Resend notification error:', error);
-            return apiResponse({
-                res,
-                statusCode: StatusCodes.BAD_REQUEST,
+                statusCode: StatusCodes.INTERNAL_SERVER_ERROR,
                 status: false,
-                message: error.message || "Failed to resend notification",
+                message: "Failed to delete notification",
+                error: error.message
             });
         }
     }

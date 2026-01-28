@@ -273,8 +273,48 @@ const getDraftAdminEventPost = async (req, res) => {
     }
 };
 
+const simpleDeleteDraft = async (req, res) => {
+    const { draftId } = req.params;
+    try {
+        const draftAdminEventPost = await DraftAdminEventPost.findByIdAndDelete(draftId);
+
+        if (!draftAdminEventPost) {
+            return apiResponse({
+                res,
+                status: false,
+                message: "Draft not found.",
+                statusCode: StatusCodes.NOT_FOUND,
+            });
+        }
+
+        // Clean up S3 files if they exist
+        if (draftAdminEventPost?.attachment) {
+            await helper.deleteMediaFromS3Bucket(draftAdminEventPost?.attachment)
+        }
+        if(draftAdminEventPost?.thumbnail){
+            await helper.deleteMediaFromS3Bucket(draftAdminEventPost?.thumbnail)
+        }
+
+        return apiResponse({
+            res,
+            status: true,
+            message: "Draft deleted successfully.",
+            statusCode: StatusCodes.OK,
+            data: draftAdminEventPost,
+        });
+    } catch (error) {
+        return apiResponse({
+            res,
+            status: false,
+            message: "Failed to delete draft event post.",
+            statusCode: StatusCodes.INTERNAL_SERVER_ERROR,
+        });
+    }
+};
+
 export default {
     createAdminDraftEventPost,
     deleteDraftAdminEventPost,
-    getDraftAdminEventPost
+    getDraftAdminEventPost,
+    simpleDeleteDraft
 };

@@ -52,8 +52,8 @@ const adminNotificationSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['SENT', 'PARTIAL_FAILED', 'FAILED'],
-        default: 'SENT'
+        enum: ['PENDING', 'SENT', 'PARTIAL_FAILED', 'FAILED'],
+        default: 'PENDING'
     },
     deliveryCompletedAt: Date
 }, {

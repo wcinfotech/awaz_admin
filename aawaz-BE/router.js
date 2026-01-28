@@ -13,6 +13,7 @@ import generalPostDraftRoute from "./routes/general-post-draft.route.js";
 import appLifecycleRoute from "./routes/app-lifecycle.route.js";
 import userSosRoute from "./routes/user-sos.route.js";
 import userNotificationRoute from "./routes/user-notification.route.js";
+import deviceTokenRoute from "./routes/deviceToken.route.js";
 //admin panel routes
 import adminAuthRoute from "./admin-panel/routes/admin-auth.route.js";
 import adminUserRoute from "./admin-panel/routes/admin-user.route.js";
@@ -46,6 +47,7 @@ export default {
   appLifecycleRoute,
   userSosRoute,
   userNotificationRoute,
+  deviceTokenRoute,
   //admin panel routes
   adminAuthRoute,
   adminUserRoute,

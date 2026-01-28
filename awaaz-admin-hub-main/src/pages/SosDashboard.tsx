@@ -86,8 +86,43 @@ export default function SosDashboard() {
     const { data: statistics, isLoading: isLoadingStats } = useQuery<SosStatistics>({
         queryKey: ['sos-statistics', '7d'],
         queryFn: async () => {
-            const res = await api.get('/admin/v1/sos/statistics?period=7d');
-            return res.data.data;
+            try {
+                const res = await api.get('/admin/v1/sos/statistics?period=7d');
+                console.log('🔍 SOS Statistics API Response:', res.data);
+
+                // Ensure we always return valid data structure
+                const data = res.data?.data;
+                if (!data) {
+                    console.log('🔍 No statistics data, returning default');
+                    return {
+                        total: 0,
+                        statusBreakdown: {
+                            sent: 0,
+                            partialFailed: 0,
+                            failed: 0,
+                            resolved: 0
+                        },
+                        averageResponseTime: null,
+                        recentEvents: []
+                    };
+                }
+
+                return data;
+            } catch (error) {
+                console.error('🔍 SOS Statistics fetch error:', error);
+                // Return default data on error
+                return {
+                    total: 0,
+                    statusBreakdown: {
+                        sent: 0,
+                        partialFailed: 0,
+                        failed: 0,
+                        resolved: 0
+                    },
+                    averageResponseTime: null,
+                    recentEvents: []
+                };
+            }
         },
         refetchInterval: 30000, // Refresh every 30 seconds
     });
@@ -104,15 +139,46 @@ export default function SosDashboard() {
     }>({
         queryKey: ['sos-events', filters],
         queryFn: async () => {
-            const params = new URLSearchParams();
-            if (filters.status !== 'all') params.append('status', filters.status);
-            if (filters.date) params.append('date', filters.date);
-            if (filters.userId) params.append('userId', filters.userId);
-            params.append('page', '1');
-            params.append('limit', '20');
+            try {
+                const params = new URLSearchParams();
+                if (filters.status !== 'all') params.append('status', filters.status);
+                if (filters.date) params.append('date', filters.date);
+                if (filters.userId) params.append('userId', filters.userId);
+                params.append('page', '1');
+                params.append('limit', '20');
 
-            const res = await api.get(`/admin/v1/sos/list?${params}`);
-            return res.data.data;
+                const res = await api.get(`/admin/v1/sos/list?${params}`);
+                console.log('🔍 SOS Events API Response:', res.data);
+
+                // Ensure we always return valid data structure
+                const data = res.data?.data;
+                if (!data) {
+                    console.log('🔍 No events data, returning default');
+                    return {
+                        events: [],
+                        pagination: {
+                            page: 1,
+                            limit: 20,
+                            total: 0,
+                            pages: 0
+                        }
+                    };
+                }
+
+                return data;
+            } catch (error) {
+                console.error('🔍 SOS Events fetch error:', error);
+                // Return default data on error
+                return {
+                    events: [],
+                    pagination: {
+                        page: 1,
+                        limit: 20,
+                        total: 0,
+                        pages: 0
+                    }
+                };
+            }
         },
         refetchInterval: 30000, // Refresh every 30 seconds
     });

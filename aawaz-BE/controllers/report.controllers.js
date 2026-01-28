@@ -7,6 +7,9 @@ const createReport = async (req, res) => {
     const { reportedUserId, postId, commentId, commentReplyId, reason, reportType } = req.body;
     const userId = req.user.id;
 
+    console.log(" Report creation - Reason from user:", reason);
+    console.log(" Report creation - Full body:", req.body);
+
     try {
       const existingReport = await Report.findOne({
         userId,
@@ -26,6 +29,8 @@ const createReport = async (req, res) => {
         });
       }
 
+      console.log(" Report creation - Creating report with reason:", reason);
+
       const newReport = await Report.create({
         userId,
         reason,
@@ -35,6 +40,8 @@ const createReport = async (req, res) => {
         commentId: commentId || null,
         commentReplyId: commentReplyId || null,
       });
+
+      console.log(" Report creation - Saved report reason:", newReport.reason);
 
       // Log report creation
       let action = 'POST_REPORTED';
@@ -66,6 +73,7 @@ const createReport = async (req, res) => {
         statusCode: StatusCodes.OK,
       });
     } catch (error) {
+      console.error(" Report creation - Error:", error);
       ActivityLogger.logError('REPORT_CREATE_ERROR', 'Error creating report', error, {
         userId,
         reportType,

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import api from "@/lib/api";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { Card, CardContent } from "@/components/ui/card";
@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import {
     ArrowLeft,
@@ -17,6 +17,7 @@ import {
     Heart,
     Share2,
     MessageCircle,
+    Trash,
 } from "lucide-react";
 import { format } from "date-fns";
 
@@ -24,6 +25,23 @@ export default function EventDetailPage() {
     const navigate = useNavigate();
     const { postType, id } = useParams();
     console.log('🆔 useParams:', { postType, id });
+
+    // State for editable fields
+    const [editableData, setEditableData] = useState({
+        title: "",
+        additionalDetails: "",
+        hashTags: "",
+        address: ""
+    });
+
+    // State for delete confirmation dialog
+    const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
+    const [isUpdating, setIsUpdating] = useState(false);
+    const [isMediaPreviewOpen, setIsMediaPreviewOpen] = useState(false);
+
+    // Get queryClient for cache invalidation
+    const queryClient = useQueryClient();
 
     // Fetch event details from API
     const { data: eventDetailsData, isLoading: isLoadingEvent } = useQuery({
@@ -75,6 +93,17 @@ export default function EventDetailPage() {
                 if (response.data.title || response.data._id) {
                     console.log('✅ Found event data directly in response.data');
                     console.log('✅ Event data:', response.data);
+                    // Update editable data when event data loads
+                    if (response.data) {
+                        const eventData = response.data.data || response.data;
+                        setEditableData({
+                            title: eventData?.title || "",
+                            additionalDetails: eventData?.additionalDetails || "",
+                            hashTags: eventData?.hashTags?.join(", ") || "",
+                            address: eventData?.address || ""
+                        });
+                    }
+
                     return response.data;
                 }
 
@@ -96,35 +125,80 @@ export default function EventDetailPage() {
         staleTime: 30000,
     });
 
-    const [isUpdating, setIsUpdating] = useState(false);
-    const [isDeleting, setIsDeleting] = useState(false);
+    // Delete mutation
+    const deleteMutation = useMutation({
+        mutationFn: async (eventId: string) => {
+            const response = await api.delete(`/admin/v1/event-post/${eventId}`);
+            return response.data;
+        },
+        onSuccess: () => {
+            toast.success("Event deleted successfully");
+            navigate('/'); // Redirect to home page (Event list)
+        },
+        onError: (error: any) => {
+            toast.error(error?.response?.data?.message || "Failed to delete event");
+        }
+    });
 
-    // Media Preview Popup State
-    const [isMediaPreviewOpen, setIsMediaPreviewOpen] = useState(false);
+    // Update mutation
+    const updateMutation = useMutation({
+        mutationFn: async (updateData: any) => {
+            const response = await api.put('/admin/v1/event-post/update-text', updateData);
+            return response.data;
+        },
+        onSuccess: (data, variables) => {
+            toast.success("Event updated successfully");
+            // Refetch event details to get updated data
+            queryClient.invalidateQueries({ queryKey: ['event-detail', postType, id] });
+        },
+        onError: (error: any) => {
+            toast.error(error?.response?.data?.message || "Failed to update event");
+        }
+    });
 
     const handleUpdate = async () => {
+        if (!id) {
+            toast.error("No event ID found");
+            return;
+        }
+
         setIsUpdating(true);
         try {
-            await new Promise((resolve) => setTimeout(resolve, 1500));
-            toast.success("Event updated successfully!");
-        } catch (err) {
-            toast.error("Failed to update event");
+            const updatePayload = {
+                eventPostId: id,
+                title: editableData.title,
+                additionalDetails: editableData.additionalDetails,
+                hashTags: editableData.hashTags.split(',').map(tag => tag.trim()).filter(tag => tag),
+                address: editableData.address
+            };
+
+            await updateMutation.mutateAsync(updatePayload);
         } finally {
             setIsUpdating(false);
         }
     };
 
     const handleDelete = async () => {
+        setIsDeleteDialogOpen(true);
+    };
+
+    const confirmDelete = async () => {
+        if (!id) {
+            toast.error("No event ID found");
+            return;
+        }
+
         setIsDeleting(true);
         try {
-            await new Promise((resolve) => setTimeout(resolve, 1500));
-            toast.success("Event deleted successfully!");
-            navigate("/");
-        } catch (err) {
-            toast.error("Failed to delete event");
+            await deleteMutation.mutateAsync(id);
         } finally {
             setIsDeleting(false);
+            setIsDeleteDialogOpen(false);
         }
+    };
+
+    const cancelDelete = () => {
+        setIsDeleteDialogOpen(false);
     };
 
     // Handle event not found
@@ -302,22 +376,16 @@ export default function EventDetailPage() {
                                     <div className="space-y-2">
                                         <Label className="text-white">Title</Label>
                                         <Input
-                                            value={eventDetailsData?.title || ""}
-                                            onChange={(e) => {
-                                                // Allow admin to edit title
-                                                console.log('Title changed:', e.target.value);
-                                            }}
+                                            value={editableData.title}
+                                            onChange={(e) => setEditableData(prev => ({ ...prev, title: e.target.value }))}
                                             className="h-12 bg-white/5 border-white/10 text-white"
                                         />
                                     </div>
                                     <div className="space-y-2">
                                         <Label className="text-white">Hashtag</Label>
                                         <Input
-                                            value={eventDetailsData?.hashTags?.join(", ") || ""}
-                                            onChange={(e) => {
-                                                // Allow admin to edit hashtags
-                                                console.log('Hashtags changed:', e.target.value);
-                                            }}
+                                            value={editableData.hashTags}
+                                            onChange={(e) => setEditableData(prev => ({ ...prev, hashTags: e.target.value }))}
                                             placeholder="#test, #example"
                                             className="h-12 bg-white/5 border-white/10 text-white"
                                         />
@@ -328,11 +396,8 @@ export default function EventDetailPage() {
                                 <div className="space-y-2">
                                     <Label className="text-white">Location</Label>
                                     <Input
-                                        value={eventDetailsData?.address || ""}
-                                        onChange={(e) => {
-                                            // Allow admin to edit address
-                                            console.log('Address changed:', e.target.value);
-                                        }}
+                                        value={editableData.address}
+                                        onChange={(e) => setEditableData(prev => ({ ...prev, address: e.target.value }))}
                                         className="h-12 bg-white/5 border-white/10 text-white"
                                     />
                                 </div>
@@ -341,11 +406,8 @@ export default function EventDetailPage() {
                                 <div className="space-y-2">
                                     <Label className="text-white">Description</Label>
                                     <Textarea
-                                        value={eventDetailsData?.additionalDetails || ""}
-                                        onChange={(e) => {
-                                            // Allow admin to edit description
-                                            console.log('Description changed:', e.target.value);
-                                        }}
+                                        value={editableData.additionalDetails}
+                                        onChange={(e) => setEditableData(prev => ({ ...prev, additionalDetails: e.target.value }))}
                                         className="min-h-[100px] bg-white/5 border-white/10 text-white resize-none"
                                     />
                                 </div>
@@ -487,6 +549,57 @@ export default function EventDetailPage() {
                                     </p>
                                 </div>
                             </div>
+                        </DialogContent>
+                    </Dialog>
+
+                    {/* Delete Confirmation Dialog */}
+                    <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+                        <DialogContent className="max-w-md p-6 bg-[#1a1a1f] border-white/10">
+                            <DialogHeader>
+                                <DialogTitle className="text-white flex items-center gap-2">
+                                    <Trash className="h-5 w-5 text-red-500" />
+                                    Confirm Deletion
+                                </DialogTitle>
+                            </DialogHeader>
+                            <div className="py-4">
+                                <p className="text-white/80 mb-4">
+                                    Are you sure you want to delete this event? This action cannot be undone.
+                                </p>
+                                <div className="bg-red-500/10 border border-red-500/20 p-3 rounded-md">
+                                    <p className="text-white font-medium">{eventDetailsData?.title}</p>
+                                    <p className="text-white/60 text-sm mt-1">
+                                        Type: {postType?.charAt(0).toUpperCase() + postType?.slice(1)}
+                                    </p>
+                                </div>
+                            </div>
+                            <DialogFooter className="flex gap-3">
+                                <Button
+                                    variant="outline"
+                                    onClick={cancelDelete}
+                                    disabled={isDeleting}
+                                    className="border-white/20 text-white hover:bg-white/10"
+                                >
+                                    Cancel
+                                </Button>
+                                <Button
+                                    variant="destructive"
+                                    onClick={confirmDelete}
+                                    disabled={isDeleting}
+                                    className="bg-red-500 hover:bg-red-600"
+                                >
+                                    {isDeleting ? (
+                                        <>
+                                            <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white mr-2" />
+                                            Deleting...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Trash className="h-4 w-4 mr-2" />
+                                            Delete Event
+                                        </>
+                                    )}
+                                </Button>
+                            </DialogFooter>
                         </DialogContent>
                     </Dialog>
                 </>

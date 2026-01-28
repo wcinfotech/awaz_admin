@@ -222,6 +222,78 @@ const createAdminEventPost = async (req, res) => {
   }
 };
 
+const updateAdminEventPostText = async (req, res) => {
+  const {
+    eventPostId,
+    title,
+    additionalDetails,
+    hashTags,
+    address
+  } = req.body;
+
+  // Validate event ID
+  if (!mongoose.Types.ObjectId.isValid(eventPostId)) {
+    return apiResponse({
+      res,
+      status: false,
+      message: "Invalid Event ID",
+      statusCode: StatusCodes.BAD_REQUEST,
+    });
+  }
+
+  try {
+    // Find and update the event post
+    const updatedEventPost = await AdminEventPost.findByIdAndUpdate(
+      eventPostId,
+      {
+        title,
+        additionalDetails,
+        hashTags: Array.isArray(hashTags) ? hashTags : hashTags.split(',').map(tag => tag.trim()).filter(tag => tag),
+        address
+      },
+      { new: true, runValidators: true }
+    );
+
+    if (!updatedEventPost) {
+      return apiResponse({
+        res,
+        status: false,
+        message: "Event post not found",
+        statusCode: StatusCodes.NOT_FOUND,
+      });
+    }
+
+    // Log the activity
+    await ActivityLogger.log({
+      level: 'INFO',
+      type: 'ADMIN',
+      action: 'EVENT_UPDATED',
+      message: `Admin updated event: ${title}`,
+      adminId: req.user.id,
+      entityId: eventPostId,
+      metadata: {
+        updatedFields: ['title', 'additionalDetails', 'hashTags', 'address']
+      }
+    });
+
+    return apiResponse({
+      res,
+      status: true,
+      message: "Event updated successfully",
+      statusCode: StatusCodes.OK,
+      data: updatedEventPost,
+    });
+  } catch (error) {
+    console.log("Error updating event post:", error);
+    return apiResponse({
+      res,
+      status: false,
+      message: "Failed to update event post",
+      statusCode: StatusCodes.INTERNAL_SERVER_ERROR,
+    });
+  }
+};
+
 const updateAdminEventPost = async (req, res) => {
   const {
     eventPostId,
@@ -2107,9 +2179,66 @@ const permanentDeletePost = async (req, res) => {
   }
 };
 
+const simpleDeletePost = async (req, res) => {
+  try {
+    const { postId } = req.params;
+
+    // Find and delete the post
+    const deletedPost = await AdminEventPost.findByIdAndDelete(postId);
+
+    if (!deletedPost) {
+      return apiResponse({
+        res,
+        status: false,
+        message: "Post not found.",
+        statusCode: StatusCodes.NOT_FOUND,
+      });
+    }
+
+    // Clean up related data
+    await EventPost.findOneAndDelete({ adminCreatedPostId: postId });
+    await Report.deleteMany({ postId: postId });
+    await Notification.updateMany(
+      { "notifications.eventId": postId },
+      { $pull: { notifications: { eventId: postId } } }
+    );
+    await User.updateMany(
+      {
+        $or: [
+          { savedEventPosts: postId },
+          { eventPostNotificationOnIds: postId },
+        ],
+      },
+      {
+        $pull: {
+          savedEventPosts: postId,
+          eventPostNotificationOnIds: postId,
+        },
+      }
+    );
+
+    return apiResponse({
+      res,
+      status: true,
+      message: "Post deleted successfully.",
+      statusCode: StatusCodes.OK,
+      data: deletedPost,
+    });
+  } catch (error) {
+    console.log("error", error);
+    return apiResponse({
+      res,
+      status: false,
+      message: "Failed to delete event post.",
+      statusCode: StatusCodes.INTERNAL_SERVER_ERROR,
+    });
+  }
+};
+
 export default {
   createAdminEventPost,
   updateAdminEventPost,
+  updateAdminEventPostText,
   deleteAdminEventPost,
   getAdminEventPosts,
   addFileAndTimelineToAdminEventPost,
@@ -2127,5 +2256,6 @@ export default {
   updateLostItemFoundStatus,
   getRescuePendingUpdateCount,
   bulkCreatePostByAdmin,
-  permanentDeletePost
+  permanentDeletePost,
+  simpleDeletePost
 };

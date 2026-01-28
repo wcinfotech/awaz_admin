@@ -16,6 +16,8 @@ route.get("/user-list", adminVerifyToken, verifyRole([enums.userRoleEnum.ADMIN, 
 
 route.get("/comment-list", adminVerifyToken, verifyRole([enums.userRoleEnum.ADMIN, enums.userRoleEnum.OWNER]), reportController.getAllCommentReports);
 
+route.get("/:reportId", adminVerifyToken, verifyRole([enums.userRoleEnum.ADMIN, enums.userRoleEnum.OWNER]), reportController.getReportById);
+
 route.delete("/delete-comment", adminVerifyToken, verifyRole([enums.userRoleEnum.ADMIN, enums.userRoleEnum.OWNER]), validate(adminReportValidation.deleteCommentValidation), reportController.deletePostCommentAndCommentReply);
 
 export default route;

@@ -239,6 +239,8 @@ class SosService {
      */
     async getSosList(filters = {}) {
         try {
+            console.log("🔍 SOS Service Filters:", filters);
+            
             const { status, date, userId, page = 1, limit = 20 } = filters;
             
             const query = {};
@@ -258,30 +260,58 @@ class SosService {
                 query.triggeredAt = { $gte: startDate, $lt: endDate };
             }
 
+            console.log("🔍 SOS Service Query:", query);
+
             const skip = (page - 1) * limit;
 
-            const sosEvents = await SosEvent.find(query)
-                .populate('userId', 'name username email profilePicture')
-                .populate('resolvedBy', 'name email')
-                .sort({ triggeredAt: -1 })
-                .skip(skip)
-                .limit(limit)
-                .lean();
+            try {
+                const sosEvents = await SosEvent.find(query)
+                    .populate('userId', 'name username email profilePicture')
+                    .populate('resolvedBy', 'name email')
+                    .sort({ triggeredAt: -1 })
+                    .skip(skip)
+                    .limit(limit)
+                    .lean();
 
-            const total = await SosEvent.countDocuments(query);
+                const total = await SosEvent.countDocuments(query);
 
+                console.log("🔍 SOS Service Results:", { eventsCount: sosEvents.length, total });
+
+                return {
+                    events: sosEvents || [],
+                    pagination: {
+                        page: parseInt(page),
+                        limit: parseInt(limit),
+                        total: total || 0,
+                        pages: Math.ceil((total || 0) / limit)
+                    }
+                };
+            } catch (dbError) {
+                console.error("🔍 SOS Service DB Error:", dbError);
+                // Return empty result if DB operations fail
+                return {
+                    events: [],
+                    pagination: {
+                        page: parseInt(page),
+                        limit: parseInt(limit),
+                        total: 0,
+                        pages: 0
+                    }
+                };
+            }
+        } catch (error) {
+            console.error("🔍 SOS List Service Error:", error);
+            ActivityLogger.logError('SOS_LIST_ERROR', 'Error fetching SOS list', error, { filters });
+            // Return empty result instead of throwing
             return {
-                events: sosEvents,
+                events: [],
                 pagination: {
-                    page,
-                    limit,
-                    total,
-                    pages: Math.ceil(total / limit)
+                    page: 1,
+                    limit: 20,
+                    total: 0,
+                    pages: 0
                 }
             };
-        } catch (error) {
-            ActivityLogger.logError('SOS_LIST_ERROR', 'Error fetching SOS list', error, { filters });
-            throw error;
         }
     }
 

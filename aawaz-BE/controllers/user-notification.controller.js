@@ -146,7 +146,65 @@ class UserNotificationController {
     }
 
     /**
-     * Add or update FCM token
+     * Add or update device token (NEW ENDPOINT)
+     */
+    async manageDeviceToken(req, res) {
+        try {
+            const userId = req.user.id;
+            const { deviceToken, platform } = req.body;
+
+            console.log('🔧 MANAGING DEVICE TOKEN:', { userId, deviceToken, platform });
+
+            // Validate required fields
+            if (!deviceToken) {
+                return apiResponse({
+                    res,
+                    statusCode: StatusCodes.BAD_REQUEST,
+                    status: false,
+                    message: "Device token is required",
+                });
+            }
+
+            // Validate platform
+            const validPlatforms = ['android', 'ios', 'web'];
+            if (platform && !validPlatforms.includes(platform)) {
+                return apiResponse({
+                    res,
+                    statusCode: StatusCodes.BAD_REQUEST,
+                    status: false,
+                    message: "Invalid platform. Must be one of: android, ios, web",
+                });
+            }
+
+            // Generate deviceId from user agent or use a default
+            const deviceId = req.get('User-Agent')?.substring(0, 100) || `device_${Date.now()}`;
+
+            const result = await globalNotificationService.manageFcmToken(userId, {
+                token: deviceToken,
+                deviceId,
+                platform: platform || 'android'
+            });
+
+            return apiResponse({
+                res,
+                statusCode: StatusCodes.OK,
+                status: true,
+                message: "Device token managed successfully",
+                data: result
+            });
+        } catch (error) {
+            console.error('Manage device token error:', error);
+            return apiResponse({
+                res,
+                statusCode: StatusCodes.BAD_REQUEST,
+                status: false,
+                message: error.message || "Failed to manage device token",
+            });
+        }
+    }
+
+    /**
+     * Add or update FCM token (LEGACY ENDPOINT)
      */
     async manageFcmToken(req, res) {
         try {

@@ -42,7 +42,19 @@ interface ReportRow {
   reportedCounts?: number;
   postImage?: string;
   thumbnail?: string;
+  attachmentFileType?: string;
+  title?: string;
   reports?: any[];
+  entity?: {
+    _id: string;
+    title: string;
+    attachment: string | null;
+    thumbnail: string | null;
+    attachmentFileType: string | null;
+    additionalDetails: string;
+    createdAt: string;
+    isDeleted: boolean;
+  };
   // Comment-specific fields
   comment?: string;
   commentedUserName?: string;
@@ -665,14 +677,42 @@ const Reports = () => {
                   </div>
                 </div>
 
-                {selectedReport.postImage && (
+                {/* Reported Content Media */}
+                {(selectedReport.entity?.attachment || selectedReport.postImage) && (
                   <div>
                     <label className="text-sm text-white/60">Reported Content</label>
-                    <img
-                      src={selectedReport.postImage}
-                      alt="Reported content"
-                      className="mt-2 rounded-lg max-w-full h-auto max-h-64 object-cover"
-                    />
+                    <div className="mt-2">
+                      {selectedReport.entity?.attachmentFileType?.includes("video") ? (
+                        <video
+                          src={selectedReport.entity.attachment}
+                          controls
+                          poster={selectedReport.entity.thumbnail}
+                          className="rounded-lg max-w-full h-auto max-h-64 object-cover"
+                        >
+                          Your browser does not support the video tag.
+                        </video>
+                      ) : (
+                        <img
+                          src={selectedReport.entity?.attachment || selectedReport.postImage}
+                          alt="Reported content"
+                          className="rounded-lg max-w-full h-auto max-h-64 object-cover"
+                        />
+                      )}
+                    </div>
+                    {selectedReport.entity?.title && (
+                      <p className="text-white/80 text-sm mt-2">{selectedReport.entity.title}</p>
+                    )}
+                  </div>
+                )}
+
+                {/* Fallback for no media */}
+                {!selectedReport.entity?.attachment && !selectedReport.postImage && selectedReport.type === "POST" && (
+                  <div>
+                    <label className="text-sm text-white/60">Reported Content</label>
+                    <p className="text-muted mt-2">No media attached</p>
+                    {selectedReport.entity?.title && (
+                      <p className="text-white/80 text-sm mt-2">{selectedReport.entity.title}</p>
+                    )}
                   </div>
                 )}
 

@@ -45,6 +45,7 @@ import {
     Image,
     AlertTriangle,
     Eye,
+    Trash,
 } from "lucide-react";
 import { format } from "date-fns";
 import { cn, haversineKm, parseDistanceFromLocation } from "@/lib/utils";
@@ -576,16 +577,21 @@ export default function EventPage({ fixedCategory }: { fixedCategory?: string })
     });
 
     const deleteDraftMutation = useMutation({
-        mutationFn: async (draftId: string) => {
-            const response = await api.delete(`/admin/v1/event-post-draft/delete/${draftId}`);
+        mutationFn: async ({ id, isDraft }: { id: string; isDraft: boolean }) => {
+            // Use correct endpoints after fixing route conflicts
+            const endpoint = isDraft
+                ? `/admin/v1/event-post-draft/delete/${id}`  // Existing draft delete endpoint
+                : `/admin/v1/event-post/${id}/simple-delete`; // Fixed simple delete endpoint
+
+            const response = await api.delete(endpoint);
             return response.data;
         },
-        onSuccess: () => {
+        onSuccess: (_, variables) => {
             queryClient.invalidateQueries({ queryKey: ['event-posts', 'all-types'] });
-            toast.success("Draft deleted");
+            toast.success(variables.isDraft ? "Draft deleted successfully" : "Post deleted successfully");
         },
         onError: (error: any) => {
-            toast.error(error?.response?.data?.message || "Failed to delete draft");
+            toast.error(error?.response?.data?.message || "Failed to delete");
         },
     });
 
@@ -607,6 +613,20 @@ export default function EventPage({ fixedCategory }: { fixedCategory?: string })
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isSyncing, setIsSyncing] = useState(false);
     const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
+
+    // Confirmation dialog state
+    const [deleteConfirmation, setDeleteConfirmation] = useState<{
+        isOpen: boolean;
+        id: string;
+        isDraft: boolean;
+        title: string;
+    }>({
+        isOpen: false,
+        id: '',
+        isDraft: false,
+        title: '',
+    });
+
     // const [isEscalationsOpen, setIsEscalationsOpen] = useState(false);
 
     const pageTitle = fixedCategory ? (fixedCategory.charAt(0).toUpperCase() + fixedCategory.slice(1)) : "Event";
@@ -647,22 +667,51 @@ export default function EventPage({ fixedCategory }: { fixedCategory?: string })
         }
     };
 
-    const handleDeleteDraft = async (draftId: string) => {
-        if (processingIds.includes(draftId)) return;
-        setProcessingIds((p) => [...p, draftId]);
+    const handleDeleteDraft = async (id: string, isDraft: boolean, title: string) => {
+        // Show confirmation dialog instead of deleting immediately
+        setDeleteConfirmation({
+            isOpen: true,
+            id,
+            isDraft,
+            title,
+        });
+    };
+
+    const confirmDelete = async () => {
+        const { id, isDraft } = deleteConfirmation;
+
+        if (processingIds.includes(id)) return;
+        setProcessingIds((p) => [...p, id]);
+
+        // Close confirmation dialog
+        setDeleteConfirmation({
+            isOpen: false,
+            id: '',
+            isDraft: false,
+            title: '',
+        });
 
         queryClient.setQueryData<(EventFromAPI & { postType?: string; isDraft?: boolean })[]>(
             ['event-posts', 'all-types'],
-            (current) => (current ? current.filter((item) => item._id !== draftId) : current)
+            (current) => (current ? current.filter((item) => item._id !== id) : current)
         );
 
         try {
-            await deleteDraftMutation.mutateAsync(draftId);
+            await deleteDraftMutation.mutateAsync({ id, isDraft });
         } catch (err) {
             queryClient.invalidateQueries({ queryKey: ['event-posts', 'all-types'] });
         } finally {
-            setProcessingIds((p) => p.filter((id) => id !== draftId));
+            setProcessingIds((p) => p.filter((processingId) => processingId !== id));
         }
+    };
+
+    const cancelDelete = () => {
+        setDeleteConfirmation({
+            isOpen: false,
+            id: '',
+            isDraft: false,
+            title: '',
+        });
     };
     const [videoImagePreview, setVideoImagePreview] = useState<string | null>(null);
     const [thumbnailPreview, setThumbnailPreview] = useState<string | null>(null);
@@ -1141,13 +1190,15 @@ export default function EventPage({ fixedCategory }: { fixedCategory?: string })
                                                         <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
                                                             <button
                                                                 className="h-8 rounded-full bg-red-500/80 px-3 text-xs font-medium text-white hover:bg-red-500 disabled:opacity-60"
-                                                                onClick={() => handleDeleteDraft(evt.id)}
+                                                                onClick={() => handleDeleteDraft(evt.id, evt.isDraft, evt.title)}
                                                                 disabled={processingIds.includes(evt.id)}
                                                             >
                                                                 {processingIds.includes(evt.id) ? (
                                                                     <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-                                                                ) : (
+                                                                ) : evt.isDraft ? (
                                                                     "Delete Draft"
+                                                                ) : (
+                                                                    "Delete Post"
                                                                 )}
                                                             </button>
                                                         </div>
@@ -1687,6 +1738,54 @@ export default function EventPage({ fixedCategory }: { fixedCategory?: string })
                 </DialogContent>
             </Dialog>
             */}
+
+            {/* Delete Confirmation Dialog */}
+            <Dialog open={deleteConfirmation.isOpen} onOpenChange={(open) => !open && cancelDelete()}>
+                <DialogContent className="sm:max-w-[425px]">
+                    <DialogHeader>
+                        <DialogTitle className="text-lg font-semibold">
+                            Confirm Deletion
+                        </DialogTitle>
+                    </DialogHeader>
+                    <div className="py-4">
+                        <p className="text-sm text-muted-foreground mb-4">
+                            Are you sure you want to delete this {deleteConfirmation.isDraft ? 'draft' : 'post'}? This action cannot be undone.
+                        </p>
+                        <div className="bg-muted/50 p-3 rounded-md">
+                            <p className="font-medium text-sm">{deleteConfirmation.title}</p>
+                            <p className="text-xs text-muted-foreground mt-1">
+                                Type: {deleteConfirmation.isDraft ? 'Draft' : 'Published Post'}
+                            </p>
+                        </div>
+                    </div>
+                    <div className="flex justify-end gap-3 pt-4 border-t">
+                        <Button
+                            variant="outline"
+                            onClick={cancelDelete}
+                            disabled={deleteDraftMutation.isPending}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            variant="destructive"
+                            onClick={confirmDelete}
+                            disabled={deleteDraftMutation.isPending}
+                        >
+                            {deleteDraftMutation.isPending ? (
+                                <>
+                                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white mr-2" />
+                                    Deleting...
+                                </>
+                            ) : (
+                                <>
+                                    <Trash className="h-4 w-4 mr-2" />
+                                    Delete {deleteConfirmation.isDraft ? 'Draft' : 'Post'}
+                                </>
+                            )}
+                        </Button>
+                    </div>
+                </DialogContent>
+            </Dialog>
         </AdminLayout>
     );
 }

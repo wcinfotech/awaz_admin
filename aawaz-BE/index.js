@@ -7,12 +7,22 @@ import http from "http";
 import errorHandler from "./middleware/errorHandler.js";
 import router from "./router.js";
 import { initializeSocketIO } from "./socket/socket.io.js";
+import dns from "node:dns/promises";
+
+dns.setServers(["1.1.1.1", "8.8.8.8"]);
+
+import dotenv from "dotenv";
+// import connectDB from "./config/db.config.js";
+
+dotenv.config();
 
 const app = express();
 const server = http.createServer(app);
 
 app.disable("x-powered-by");
 
+// import dotenv from "dotenv";
+// dotenv.config();
 // connect database
 connectDB();
 

@@ -42,6 +42,29 @@ route.post(
   adminEventPostController.createAdminEventPost
 );
 
+// Specific delete routes first (more specific)
+route.delete(
+  "/:postId/permanent-delete",
+  adminVerifyToken,
+  verifyRole([ enums.userRoleEnum.ADMIN,enums.userRoleEnum.OWNER ]),
+  adminEventPostController.permanentDeletePost
+);
+
+route.delete(
+  "/:postId/simple-delete",
+  adminVerifyToken,
+  verifyRole([ enums.userRoleEnum.ADMIN,enums.userRoleEnum.OWNER ]),
+  adminEventPostController.simpleDeletePost
+);
+
+route.delete(
+  "/:eventPostId/timeline-or-attachment/:timelineAndAttachmentId",
+  adminVerifyToken,
+  verifyRole([enums.userRoleEnum.ADMIN, enums.userRoleEnum.OWNER]),
+  adminEventPostController.deleteAttachmentFromAdminEventPost
+);
+
+// General delete route last (less specific)
 route.delete(
   "/:eventPostId",
   adminVerifyToken,
@@ -134,6 +157,14 @@ route.put(
   adminEventPostController.updateAdminEventPost
 );
 
+// Simple text-only update route (no file uploads)
+route.put(
+  "/update-text",
+  adminVerifyToken,
+  verifyRole([enums.userRoleEnum.ADMIN, enums.userRoleEnum.OWNER]),
+  adminEventPostController.updateAdminEventPostText
+);
+
 const updateTimelineFileEventPostUploads = multer({ storage: storage }).fields([
   { name: "gallaryAttachment", maxCount: 1 },
   { name: "gallaryThumbnail", maxCount: 1 },
@@ -177,12 +208,5 @@ route.get(
 //   addEventPostUploads,
 //   adminEventPostController.bulkCreatePostByAdmin
 // );
-
-route.delete(
-  "/:postId/permanent-delete",
-  adminVerifyToken,
-  verifyRole([ enums.userRoleEnum.ADMIN,enums.userRoleEnum.OWNER ]),
-  adminEventPostController.permanentDeletePost
-);
 
 export default route;

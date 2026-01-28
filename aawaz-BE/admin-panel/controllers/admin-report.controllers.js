@@ -37,7 +37,10 @@ const updateReportStatus = async (req, res) => {
 
 const getAllPostReports = async (req, res) => {
     try {
+        console.log("🔍 Admin Post Reports - Fetching reports...");
         const reports = await Report.find({ reportType: enums.reportTypeEnum.POST }).lean();
+        
+        console.log("🔍 Admin Post Reports - Raw reports from DB:", reports.map(r => ({ id: r._id, reason: r.reason, postId: r.postId })));
 
         const groupedReports = reports.reduce((acc, report) => {
             const { postId, userId, reason } = report;
@@ -54,7 +57,10 @@ const getAllPostReports = async (req, res) => {
         const postIds = Object.keys(groupedReports);
         const userIds = [...new Set(reports.map((report) => report.userId))];
 
-        const eventPosts = await AdminEventPost.find({ _id: { $in: postIds }}).lean();
+        // Fetch complete post data with all media fields
+        const eventPosts = await AdminEventPost.find({ _id: { $in: postIds }})
+            .select('title attachments attachmentFileType additionalDetails createdAt deleted')
+            .lean();
 
         const users = await User.find({ _id: { $in: userIds } }).lean();
 
@@ -77,27 +83,56 @@ const getAllPostReports = async (req, res) => {
                     reason: report.reason,
                 };
             });
+
+            // Create entity object with complete post data
+            const entity = postDetails ? {
+                _id: postDetails._id,
+                title: postDetails.title || 'Untitled Post',
+                attachment: postDetails.attachments?.[0]?.attachment || null,
+                thumbnail: postDetails.attachments?.[0]?.thumbnail || null,
+                attachmentFileType: postDetails.attachments?.[0]?.attachmentFileType || null,
+                additionalDetails: postDetails.additionalDetails || '',
+                createdAt: postDetails.createdAt,
+                isDeleted: postDetails.deleted?.isDeleted || false
+            } : null;
+
             return {
+                _id: reports.find(r => r.postId === postId)?._id, // Use first report ID
+                type: "POST",
+                reason: reportsWithUserData && reportsWithUserData[0] && reportsWithUserData[0]?.reason,
+                status: "OPEN",
+                createdAt: reports.find(r => r.postId === postId)?.createdAt,
                 postId,
                 postImage: postDetails?.attachments?.[0]?.attachment || null,
                 thumbnail: postDetails?.attachments?.[0]?.thumbnail || null,
+                attachmentFileType: postDetails?.attachments?.[0]?.attachmentFileType || null,
+                title: postDetails?.title || 'Untitled Post',
                 reportedCounts: reportsWithUserData?.length || 0,
                 latestReportedReason: reportsWithUserData && reportsWithUserData[0] && reportsWithUserData[0]?.reason,
                 isDeleted: postDetails?.deleted?.isDeleted,
                 reports: reportsWithUserData,
+                entity // Complete entity data for frontend
             };
         });
 
-        const filteredReponse = result?.filter((v)=> v?.isDeleted === false)
+        console.log("🔍 Admin Post Reports - Processed result with entities:", result.map(r => ({ 
+            postId: r.postId, 
+            hasEntity: !!r.entity,
+            hasAttachment: !!r.entity?.attachment,
+            attachmentType: r.entity?.attachmentFileType 
+        })));
+
+        const filteredResponse = result?.filter((v)=> v?.isDeleted === false)
 
         return apiResponse({
             res,
-            data: filteredReponse,
+            data: filteredResponse,
             status: true,
             message: "Reports fetched successfully!",
             statusCode: StatusCodes.OK,
         });
     } catch (error) {
+        console.error("🔍 Admin Post Reports - Error:", error);
         return apiResponse({
             res,
             status: false,
@@ -409,10 +444,104 @@ const deletePostCommentAndCommentReply = async (req, res) => {
     }
 };
 
+const getReportById = async (req, res) => {
+    try {
+        const { reportId } = req.params;
+        
+        console.log("🔍 Admin Report Details - Fetching report:", reportId);
+        
+        const report = await Report.findById(reportId).lean();
+        
+        if (!report) {
+            return apiResponse({
+                res,
+                status: false,
+                message: "Report not found",
+                statusCode: StatusCodes.NOT_FOUND,
+            });
+        }
+        
+        console.log("🔍 Admin Report Details - Found report:", { 
+            id: report._id, 
+            type: report.reportType, 
+            postId: report.postId,
+            reason: report.reason 
+        });
+        
+        let entity = null;
+        
+        // Fetch entity based on report type
+        if (report.reportType === enums.reportTypeEnum.POST && report.postId) {
+            const post = await AdminEventPost.findById(report.postId)
+                .select('title attachments attachmentFileType additionalDetails createdAt deleted')
+                .lean();
+                
+            if (post) {
+                entity = {
+                    _id: post._id,
+                    title: post.title || 'Untitled Post',
+                    attachment: post.attachments?.[0]?.attachment || null,
+                    thumbnail: post.attachments?.[0]?.thumbnail || null,
+                    attachmentFileType: post.attachments?.[0]?.attachmentFileType || null,
+                    additionalDetails: post.additionalDetails || '',
+                    createdAt: post.createdAt,
+                    isDeleted: post.deleted?.isDeleted || false
+                };
+            }
+        }
+        
+        // Fetch user details
+        const reportingUser = await User.findById(report.userId).lean();
+        
+        const response = {
+            _id: report._id,
+            type: report.reportType,
+            reason: report.reason,
+            status: report.status,
+            createdAt: report.createdAt,
+            updatedAt: report.updatedAt,
+            reportedUserId: report.reportedUserId,
+            postId: report.postId,
+            commentId: report.commentId,
+            commentReplyId: report.commentReplyId,
+            reportingUser: reportingUser ? {
+                _id: reportingUser._id,
+                name: reportingUser.name,
+                email: reportingUser.email,
+                profilePicture: reportingUser.profilePicture
+            } : null,
+            entity
+        };
+        
+        console.log("🔍 Admin Report Details - Response:", {
+            hasEntity: !!entity,
+            hasAttachment: !!entity?.attachment,
+            attachmentType: entity?.attachmentFileType
+        });
+        
+        return apiResponse({
+            res,
+            data: response,
+            status: true,
+            message: "Report details fetched successfully!",
+            statusCode: StatusCodes.OK,
+        });
+    } catch (error) {
+        console.error("🔍 Admin Report Details - Error:", error);
+        return apiResponse({
+            res,
+            status: false,
+            message: "Failed to fetch report details!",
+            statusCode: StatusCodes.INTERNAL_SERVER_ERROR,
+        });
+    }
+};
+
 export default {
     getAllPostReports,
     getAllUserReports,
     getAllCommentReports,
+    getReportById,
     updateReportStatus,
     deletePostCommentAndCommentReply
 };

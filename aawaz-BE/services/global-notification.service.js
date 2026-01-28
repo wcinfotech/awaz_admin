@@ -1,209 +1,533 @@
 import AdminNotification from '../models/admin-notification.model.js';
-import User from '../models/user.model.js';
 import UserNotification from '../models/user-notification.model.js';
+import User from '../models/user.model.js';
+import DeviceToken from '../models/deviceToken.model.js';
 import ActivityLogger from '../utils/activity-logger.js';
+import mongoose from 'mongoose';
+import axios from 'axios';
+import config from '../config/config.js';
 
 class GlobalNotificationService {
     /**
-     * Send global notification to all users
+     * Manage FCM token - Add or update (Updated for OneSignal compatibility)
+     */
+    async manageFcmToken(userId, tokenData) {
+        console.log('🔧 MANAGING DEVICE TOKEN:', { userId, tokenData });
+        
+        const { token, deviceId, platform } = tokenData;
+        
+        try {
+            // Remove existing token for same device from fcmTokens array
+            await User.updateOne(
+                { _id: userId },
+                { $pull: { fcmTokens: { deviceId } } }
+            );
+            
+            // Add new token to fcmTokens array (for compatibility)
+            await User.updateOne(
+                { _id: userId },
+                { 
+                    $push: { 
+                        fcmTokens: {
+                            token,
+                            deviceId,
+                            platform: platform || 'android',
+                            isActive: true,
+                            lastUsedAt: new Date(),
+                            createdAt: new Date()
+                        }
+                    }
+                }
+            );
+            
+            // Also update pushToken field for OneSignal compatibility
+            await User.updateOne(
+                { _id: userId },
+                { 
+                    pushToken: token,
+                    deviceId: deviceId
+                }
+            );
+            
+            console.log('✅ DEVICE TOKEN MANAGED SUCCESSFULLY (FCM + OneSignal)');
+            
+            // Log token management
+            ActivityLogger.logNotificationUser('FCM_TOKEN_MANAGED', 'User device token managed (FCM + OneSignal)', userId, {
+                deviceId,
+                platform,
+                action: 'add_update',
+                provider: 'OneSignal'
+            });
+            
+            return {
+                success: true,
+                message: 'Device token managed successfully',
+                deviceId,
+                platform,
+                provider: 'OneSignal'
+            };
+            
+        } catch (error) {
+            console.error('❌ DEVICE TOKEN MANAGEMENT FAILED:', error.message);
+            throw new Error(`Failed to manage device token: ${error.message}`);
+        }
+    }
+    
+    /**
+     * Remove FCM token
+     */
+    async removeFcmToken(userId, deviceId) {
+        console.log('🗑️ REMOVING FCM TOKEN:', { userId, deviceId });
+        
+        try {
+            const result = await User.updateOne(
+                { _id: userId },
+                { $pull: { fcmTokens: { deviceId } } }
+            );
+            
+            if (result.modifiedCount === 0) {
+                throw new Error('FCM token not found for this device');
+            }
+            
+            console.log('✅ FCM TOKEN REMOVED SUCCESSFULLY');
+            
+            // Log token removal
+            ActivityLogger.logNotificationUser('FCM_TOKEN_REMOVED', 'User FCM token removed', userId, {
+                deviceId,
+                action: 'remove'
+            });
+            
+            return {
+                success: true,
+                message: 'FCM token removed successfully',
+                deviceId
+            };
+            
+        } catch (error) {
+            console.error('❌ FCM TOKEN REMOVAL FAILED:', error.message);
+            throw new Error(`Failed to remove FCM token: ${error.message}`);
+        }
+    }
+    
+    /**
+     * Get user notifications
+     */
+    async getUserNotifications(userId, options = {}) {
+        const { page = 1, limit = 20, unreadOnly = false } = options;
+        
+        const query = { userId };
+        if (unreadOnly) {
+            query.isRead = false;
+        }
+        
+        const skip = (page - 1) * limit;
+        
+        const notifications = await UserNotification.find(query)
+            .populate('notificationId', 'title message type sentAt')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .lean();
+            
+        const total = await UserNotification.countDocuments(query);
+        
+        return {
+            notifications,
+            pagination: {
+                page,
+                limit,
+                total,
+                pages: Math.ceil(total / limit)
+            }
+        };
+    }
+    
+    /**
+     * Mark notification as read
+     */
+    async markNotificationAsRead(userId, notificationId) {
+        const result = await UserNotification.updateOne(
+            { userId, _id: notificationId },
+            { isRead: true, readAt: new Date() }
+        );
+        
+        if (result.modifiedCount === 0) {
+            throw new Error('Notification not found');
+        }
+        
+        return { success: true, message: 'Notification marked as read' };
+    }
+    
+    /**
+     * Get unread notifications count
+     */
+    async getUnreadNotificationsCount(userId) {
+        const count = await UserNotification.countDocuments({
+            userId,
+            isRead: false
+        });
+        
+        return { unreadCount: count };
+    }
+
+    /**
+     * Send global notification - STRICT ENFORCED FLOW
      */
     async sendGlobalNotification(notificationData, adminId) {
+        console.log('🚀 STARTING NOTIFICATION PIPELINE');
+        
+        // ✅ STEP 1 – VALIDATE INPUT
+        console.log('📝 STEP 1: Validating input...');
+        const { title, message, type, imageUrl, deepLink } = notificationData;
+        
+        if (!title || !message || !type) {
+            console.log('❌ STEP 1 FAILED: Missing required fields');
+            throw new Error('Title, message, and type are required');
+        }
+        
+        const validTypes = ['INFO', 'ALERT', 'WARNING', 'PROMOTION'];
+        if (!validTypes.includes(type)) {
+            console.log('❌ STEP 1 FAILED: Invalid notification type');
+            throw new Error('Invalid notification type. Must be one of: INFO, ALERT, WARNING, PROMOTION');
+        }
+        
+        console.log('✅ STEP 1 PASSED: Input validation successful');
+
+        // ✅ STEP 2 – SAVE NOTIFICATION (MANDATORY)
+        console.log('💾 STEP 2: Saving notification to database...');
+        let adminNotification;
         try {
-            const { title, message, type, imageUrl, deepLink } = notificationData;
-
-            // Validate required fields
-            if (!title || !message || !type) {
-                throw new Error('Title, message, and type are required');
-            }
-
-            // Get all active users
-            const users = await User.find({ 
-                isBlocked: false,
-                'fcmTokens.0': { $exists: true } // Users with at least one FCM token
-            }).select('_id fcmTokens');
-
-            if (users.length === 0) {
-                throw new Error('No active users found with FCM tokens');
-            }
-
-            // Create admin notification record
-            const adminNotification = new AdminNotification({
+            adminNotification = new AdminNotification({
                 title,
                 message,
                 type,
                 imageUrl: imageUrl || null,
                 deepLink: deepLink || null,
                 sentBy: adminId,
-                totalUsers: users.length
+                sentAt: new Date(),
+                status: 'PENDING',
+                totalUsers: 0,
+                deliveredUsers: 0,
+                failedUsers: 0
             });
-
+            
             await adminNotification.save();
+            console.log('✅ STEP 2 COMPLETED: Notification saved with ID:', adminNotification._id);
+        } catch (error) {
+            console.log('❌ STEP 2 FAILED: Database save failed:', error.message);
+            throw new Error(`Failed to save notification: ${error.message}`);
+        }
 
-            // Log admin action
-            ActivityLogger.logNotificationAdmin('GLOBAL_NOTIFICATION_SENT', 'Admin sent global notification', adminId, {
+        // ✅ STEP 3 – LOG ADMIN ACTION (MANDATORY)
+        console.log('📋 STEP 3: Logging admin action...');
+        try {
+            ActivityLogger.logNotificationAdmin('GLOBAL_NOTIFICATION_CREATED', 'Admin created global notification', adminId, {
                 notificationId: adminNotification._id,
                 title,
                 type,
-                totalUsers: users.length
+                message: message.substring(0, 100) // Truncate for log
             });
+            console.log('✅ STEP 3 COMPLETED: Admin action logged');
+        } catch (logError) {
+            console.log('⚠️ STEP 3 WARNING: Log creation failed:', logError.message);
+            // Continue even if logging fails
+        }
 
-            // Send notifications asynchronously (non-blocking)
-            this.sendNotificationsToUsers(adminNotification, users).catch(error => {
-                ActivityLogger.logNotificationSystem('GLOBAL_NOTIFICATION_SEND_ERROR', 'Error sending notifications to users', 'ERROR', {
-                    notificationId: adminNotification._id
-                });
-            });
-
-            return adminNotification;
+        // ✅ STEP 4 – FETCH ALL ACTIVE DEVICE TOKENS
+        console.log('👥 STEP 4: Fetching all active device tokens...');
+        let deviceTokens;
+        let totalTokens = 0;
+        
+        try {
+            // Fetch from dedicated DeviceToken collection
+            deviceTokens = await DeviceToken.find({ isActive: true })
+                .select('deviceToken userId platform deviceId lastActiveAt')
+                .lean();
+                
+            totalTokens = deviceTokens.length;
+            
+            console.log('✅ STEP 4 COMPLETED: Found', totalTokens, 'active device tokens');
+            console.log('📱 STEP 4 INFO: Platform distribution:', 
+                deviceTokens.reduce((acc, token) => {
+                    acc[token.platform] = (acc[token.platform] || 0) + 1;
+                    return acc;
+                }, {})
+            );
+            
         } catch (error) {
-            ActivityLogger.logError('GLOBAL_NOTIFICATION_CREATE_ERROR', 'Error creating global notification', error, {
-                adminId,
-                notificationData
+            console.log('❌ STEP 4 FAILED: Device token fetch failed:', error.message);
+            throw new Error(`Failed to fetch device tokens: ${error.message}`);
+        }
+
+        if (totalTokens === 0) {
+            console.log('⚠️ STEP 4 CRITICAL: No active device tokens found');
+            
+            // Update notification status to FAILED
+            await AdminNotification.findByIdAndUpdate(adminNotification._id, {
+                status: 'FAILED',
+                totalUsers: 0,
+                deliveredUsers: 0,
+                failedUsers: 0
             });
+            
+            // Log critical issue
+            ActivityLogger.logNotificationSystem('NO_DEVICE_TOKENS', 'No active device tokens found for global notification', 'ERROR', {
+                notificationId: adminNotification._id,
+                message: 'No active device tokens found - users have not registered their devices'
+            });
+            
+            // Throw clear error for frontend
+            throw new Error('No active user device tokens found');
+        }
+
+        // ✅ STEP 5 – CREATE USER NOTIFICATIONS (MANDATORY)
+        console.log('📬 STEP 5: Creating user notifications...');
+        let userNotificationsCreated = 0;
+        try {
+            // Get unique user IDs from device tokens
+            const uniqueUserIds = [...new Set(deviceTokens.map(token => token.userId))];
+            
+            const userNotifications = uniqueUserIds.map(userId => ({
+                userId,
+                notificationId: adminNotification._id,
+                title,
+                message,
+                type,
+                isRead: false,
+                deliveredAt: null,
+                pushStatus: 'PENDING'
+            }));
+
+            if (userNotifications.length > 0) {
+                await UserNotification.insertMany(userNotifications);
+                userNotificationsCreated = userNotifications.length;
+                console.log('✅ STEP 5 COMPLETED: Created', userNotificationsCreated, 'user notifications');
+            }
+
+            // Log user notification creation
+            ActivityLogger.logNotificationSystem('USER_NOTIFICATIONS_CREATED', 'User notifications created', 'INFO', {
+                notificationId: adminNotification._id,
+                userCount: userNotificationsCreated,
+                deviceTokenCount: totalTokens
+            });
+        } catch (error) {
+            console.log('❌ STEP 5 FAILED: User notification creation failed:', error.message);
+            throw new Error(`Failed to create user notifications: ${error.message}`);
+        }
+
+        // Update admin notification with user count
+        adminNotification.totalUsers = userNotificationsCreated;
+        await adminNotification.save();
+
+        // ✅ STEP 6 – SEND PUSH VIA ONE-SIGNAL (ASYNC, NON-BLOCKING)
+        console.log('📡 STEP 6: Starting OneSignal push notification delivery (async)...');
+        
+        // Start async push delivery without blocking
+        this.sendPushNotificationsOneSignal(adminNotification, deviceTokens).catch(error => {
+            console.log('❌ ASYNC ONE-SIGNAL PUSH FAILED:', error.message);
+            ActivityLogger.logNotificationSystem('PUSH_NOTIFICATION_ASYNC_FAILED', 'Async OneSignal push notification delivery failed', 'ERROR', {
+                notificationId: adminNotification._id,
+                error: error.message,
+                provider: 'OneSignal'
+            });
+        });
+
+        console.log('🎯 NOTIFICATION PIPELINE COMPLETED SUCCESSFULLY');
+        console.log('📊 SUMMARY:');
+        console.log('  - Notification ID:', adminNotification._id);
+        console.log('  - Title:', title);
+        console.log('  - Total Users:', userNotificationsCreated);
+        console.log('  - Status:', adminNotification.status);
+        console.log('  - Push delivery: Started in background');
+
+        return adminNotification;
+    }
+
+    /**
+     * Send push notifications via OneSignal
+     */
+    async sendPushNotificationsOneSignal(adminNotification, deviceTokens) {
+        console.log('📡 ONE-SIGNAL PUSH: Starting delivery for notification', adminNotification._id);
+        
+        let deliveredCount = 0;
+        let failedCount = 0;
+        let totalTokens = 0;
+        const playerIds = [];
+
+        try {
+            // Collect all player IDs from deviceTokens
+            for (const deviceToken of deviceTokens) {
+                if (deviceToken.deviceToken && deviceToken.deviceToken.trim() !== '') {
+                    playerIds.push(deviceToken.deviceToken);
+                    totalTokens++;
+                }
+            }
+
+            if (totalTokens === 0) {
+                console.log('⚠️ ONE-SIGNAL: No player IDs found for push notification');
+                throw new Error('No active device tokens found for push delivery');
+            }
+
+            console.log(`📱 ONE-SIGNAL: Sending to ${totalTokens} player IDs`);
+
+            // Prepare OneSignal message
+            const message = {
+                app_id: config.oneSignal.appId,
+                include_player_ids: playerIds,
+                contents: {
+                    en: adminNotification.message
+                },
+                headings: {
+                    en: adminNotification.title
+                },
+                data: {
+                    type: 'global_notification',
+                    notificationId: adminNotification._id.toString(),
+                    deepLink: adminNotification.deepLink || null
+                },
+                ...(adminNotification.imageUrl && {
+                    large_icon: adminNotification.imageUrl,
+                    big_picture: adminNotification.imageUrl,
+                    ios_attachments: {
+                        id1: adminNotification.imageUrl
+                    }
+                }),
+                android_group: "global_notifications",
+                android_group_message: { en: "You have $[notif_count] new notifications" },
+                ios_badgeType: "Increase",
+                ios_badgeCount: 1,
+                priority: 10
+            };
+
+            // Send to OneSignal
+            const response = await axios.post('https://onesignal.com/api/v1/notifications', message, {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Basic ${config.oneSignal.apiKey}`
+                }
+            });
+
+            if (response.data.errors) {
+                console.log('❌ ONE-SIGNAL API ERRORS:', response.data.errors);
+                throw new Error(`OneSignal API error: ${JSON.stringify(response.data.errors)}`);
+            }
+
+            // Process results
+            if (response.data.recipients) {
+                deliveredCount = response.data.recipients;
+                failedCount = totalTokens - deliveredCount;
+            } else {
+                // If no recipients count, assume all delivered
+                deliveredCount = totalTokens;
+                failedCount = 0;
+            }
+
+            console.log(`✅ ONE-SIGNAL: Delivered ${deliveredCount}/${totalTokens}, Failed ${failedCount}`);
+
+            // Update user notifications delivery status
+            const updatePromises = deviceTokens.map(async (deviceToken) => {
+                const userDelivered = playerIds.includes(deviceToken.deviceToken);
+
+                return UserNotification.updateOne(
+                    { userId: deviceToken.userId, notificationId: adminNotification._id },
+                    { 
+                        deliveredAt: userDelivered ? new Date() : null,
+                        pushStatus: userDelivered ? 'DELIVERED' : 'FAILED',
+                        failureReason: userDelivered ? null : 'Not delivered via OneSignal'
+                    }
+                );
+            });
+
+            await Promise.all(updatePromises);
+
+            // ✅ UPDATE FINAL STATUS
+            console.log('📊 ONE-SIGNAL: Updating final notification status...');
+            let finalStatus;
+            if (deliveredCount === totalTokens && totalTokens > 0) {
+                finalStatus = 'SENT';
+            } else if (deliveredCount > 0) {
+                finalStatus = 'PARTIAL_FAILED';
+            } else {
+                finalStatus = 'FAILED';
+            }
+
+            await AdminNotification.findByIdAndUpdate(adminNotification._id, {
+                status: finalStatus,
+                deliveredUsers: deliveredCount,
+                failedUsers: failedCount
+            });
+
+            console.log('✅ ONE-SIGNAL: Final status updated to', finalStatus);
+
+            // ✅ SYSTEM LOGS
+            console.log('📋 ONE-SIGNAL: Creating system logs...');
+            
+            if (deliveredCount > 0) {
+                ActivityLogger.logNotificationSystem('PUSH_NOTIFICATION_SENT', 'OneSignal push notifications sent successfully', 'INFO', {
+                    notificationId: adminNotification._id,
+                    deliveredCount,
+                    failedCount,
+                    totalTokens,
+                    status: finalStatus,
+                    provider: 'OneSignal'
+                });
+            }
+
+            if (failedCount > 0) {
+                ActivityLogger.logNotificationSystem('PUSH_NOTIFICATION_FAILED', 'Some OneSignal push notifications failed', 'WARNING', {
+                    notificationId: adminNotification._id,
+                    failedCount,
+                    deliveredCount,
+                    totalTokens,
+                    provider: 'OneSignal'
+                });
+            }
+
+            console.log('✅ ONE-SIGNAL: System logs created');
+            console.log('🎉 ONE-SIGNAL PUSH DELIVERY COMPLETED');
+            console.log('📊 FINAL RESULTS:');
+            console.log('  - Total Player IDs:', totalTokens);
+            console.log('  - Delivered:', deliveredCount);
+            console.log('  - Failed:', failedCount);
+            console.log('  - Final Status:', finalStatus);
+
+        } catch (error) {
+            console.log('❌ ONE-SIGNAL PUSH ERROR:', error.message);
+            
+            // Update status to failed
+            await AdminNotification.findByIdAndUpdate(adminNotification._id, {
+                status: 'FAILED',
+                deliveredUsers: 0,
+                failedUsers: totalTokens
+            });
+
+            ActivityLogger.logNotificationSystem('PUSH_NOTIFICATION_ERROR', 'OneSignal push notification delivery error', 'ERROR', {
+                notificationId: adminNotification._id,
+                error: error.message,
+                provider: 'OneSignal'
+            });
+            
             throw error;
         }
     }
 
     /**
-     * Send notifications to all users (async)
+     * Send FCM notification (mock implementation)
      */
-    async sendNotificationsToUsers(adminNotification, users) {
-        let deliveredCount = 0;
-        let failedCount = 0;
-
-        // Create user notification records first
-        const userNotifications = users.map(user => ({
-            userId: user._id,
-            notificationId: adminNotification._id,
-            title: adminNotification.title,
-            message: adminNotification.message,
-            type: adminNotification.type,
-            imageUrl: adminNotification.imageUrl,
-            deepLink: adminNotification.deepLink
-        }));
-
-        // Bulk insert user notifications
-        const createdNotifications = await UserNotification.insertMany(userNotifications);
-
-        // Send push notifications
-        for (let i = 0; i < users.length; i++) {
-            const user = users[i];
-            const userNotification = createdNotifications[i];
-
-            try {
-                // Send to all active FCM tokens for this user
-                const activeTokens = user.fcmTokens.filter(token => token.isActive);
-                
-                if (activeTokens.length > 0) {
-                    const pushResult = await this.sendPushNotification(
-                        activeTokens,
-                        adminNotification.title,
-                        adminNotification.message,
-                        adminNotification.type,
-                        adminNotification.imageUrl,
-                        adminNotification.deepLink
-                    );
-
-                    // Update push status
-                    await userNotification.updatePushStatus('SENT', JSON.stringify(pushResult));
-                    deliveredCount++;
-
-                    ActivityLogger.logNotificationSystem('PUSH_SENT', 'Push notification sent successfully', 'INFO', {
-                        userId: user._id,
-                        notificationId: adminNotification._id,
-                        tokenCount: activeTokens.length
-                    });
-                } else {
-                    // No active tokens
-                    await userNotification.updatePushStatus('FAILED', 'No active FCM tokens');
-                    failedCount++;
-
-                    ActivityLogger.logNotificationSystem('PUSH_FAILED', 'No active FCM tokens for user', 'WARNING', {
-                        userId: user._id,
-                        notificationId: adminNotification._id
-                    });
-                }
-            } catch (error) {
-                // Update push status to failed
-                await userNotification.updatePushStatus('FAILED', error.message);
-                failedCount++;
-
-                ActivityLogger.logNotificationSystem('PUSH_FAILED', 'Push notification failed', 'ERROR', {
-                    userId: user._id,
-                    notificationId: adminNotification._id,
-                    error: error.message
-                });
-            }
-        }
-
-        // Update admin notification with delivery statistics
-        await adminNotification.updateDeliveryStats(deliveredCount, failedCount);
-
-        return {
-            totalUsers: users.length,
-            deliveredCount,
-            failedCount,
-            status: adminNotification.status
-        };
-    }
-
-    /**
-     * Send push notification via FCM
-     */
-    async sendPushNotification(fcmTokens, title, message, type, imageUrl, deepLink) {
-        // Mock FCM implementation - replace with actual FCM integration
-        const fcmPayload = {
-            notification: {
-                title,
-                body: message,
-                image: imageUrl || null,
-                sound: 'default'
-            },
-            data: {
-                type,
-                deepLink: deepLink || '',
-                notificationId: Date.now().toString()
-            },
-            android: {
-                priority: 'high',
-                notification: {
-                    priority: 'high',
-                    sound: 'default',
-                    channelId: type.toLowerCase()
-                }
-            },
-            apns: {
-                payload: {
-                    aps: {
-                        sound: 'default',
-                        badge: 1,
-                        category: type.toLowerCase()
-                    }
-                }
-            },
-            tokens: fcmTokens.map(t => t.token)
-        };
-
-        // Simulate FCM API call
+    async sendFCMNotification(token, notification) {
+        // Mock FCM implementation - replace with actual Firebase Admin SDK
         return new Promise((resolve, reject) => {
             setTimeout(() => {
-                // Simulate 95% success rate
-                if (Math.random() > 0.05) {
+                // Simulate 90% success rate
+                if (Math.random() > 0.1) {
                     resolve({
                         success: true,
-                        multicastId: `multicast_${Date.now()}`,
-                        results: fcmTokens.map(token => ({
-                            messageId: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                            success: true,
-                            token: token.token
-                        })),
-                        successCount: fcmTokens.length,
-                        failureCount: 0
+                        messageId: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
                     });
                 } else {
                     reject(new Error('FCM service temporarily unavailable'));
                 }
-            }, 500); // 500ms delay to simulate network
+            }, 100); // 100ms delay to simulate network
         });
     }
 
@@ -211,234 +535,123 @@ class GlobalNotificationService {
      * Get admin notifications list
      */
     async getAdminNotifications(filters = {}) {
-        try {
-            const { page = 1, limit = 20, status, type } = filters;
-            
-            const query = {};
-            
-            if (status && status !== 'all') {
-                query.status = status;
-            }
-            
-            if (type && type !== 'all') {
-                query.type = type;
-            }
-
-            const skip = (page - 1) * limit;
-
-            const notifications = await AdminNotification.find(query)
-                .populate('sentBy', 'name email')
-                .sort({ sentAt: -1 })
-                .skip(skip)
-                .limit(limit)
-                .lean();
-
-            const total = await AdminNotification.countDocuments(query);
-
-            return {
-                notifications,
-                pagination: {
-                    page,
-                    limit,
-                    total,
-                    pages: Math.ceil(total / limit)
-                }
-            };
-        } catch (error) {
-            ActivityLogger.logError('ADMIN_NOTIFICATIONS_LIST_ERROR', 'Error fetching admin notifications', error, { filters });
-            throw error;
+        const { page = 1, limit = 10, status = 'all', type = 'all' } = filters;
+        
+        const query = {};
+        if (status !== 'all') {
+            query.status = status;
         }
+        if (type !== 'all') {
+            query.type = type;
+        }
+
+        const skip = (page - 1) * limit;
+
+        const notifications = await AdminNotification.find(query)
+            .populate('sentBy', 'name email')
+            .sort({ sentAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .lean();
+
+        const total = await AdminNotification.countDocuments(query);
+
+        return {
+            notifications,
+            pagination: {
+                page,
+                limit,
+                total,
+                pages: Math.ceil(total / limit)
+            }
+        };
+    }
+
+    /**
+     * Get notification statistics
+     */
+    async getNotificationStatistics() {
+        const stats = await AdminNotification.aggregate([
+            {
+                $group: {
+                    _id: null,
+                    total: { $sum: 1 },
+                    sent: { $sum: { $cond: [{ $eq: ['$status', 'SENT'] }, 1, 0] } },
+                    partialFailed: { $sum: { $cond: [{ $eq: ['$status', 'PARTIAL_FAILED'] }, 1, 0] } },
+                    failed: { $sum: { $cond: [{ $eq: ['$status', 'FAILED'] }, 1, 0] } },
+                    pending: { $sum: { $cond: [{ $eq: ['$status', 'PENDING'] }, 1, 0] } },
+                    totalUsers: { $sum: '$totalUsers' },
+                    totalDelivered: { $sum: '$deliveredUsers' }
+                }
+            }
+        ]);
+
+        return stats[0] || {
+            total: 0,
+            sent: 0,
+            partialFailed: 0,
+            failed: 0,
+            pending: 0,
+            totalUsers: 0,
+            totalDelivered: 0
+        };
     }
 
     /**
      * Get admin notification details
      */
     async getAdminNotificationDetails(notificationId) {
-        try {
-            const notification = await AdminNotification.findById(notificationId)
-                .populate('sentBy', 'name email')
-                .lean();
+        const notification = await AdminNotification.findById(notificationId)
+            .populate('sentBy', 'name email')
+            .lean();
 
-            if (!notification) {
-                throw new Error('Notification not found');
-            }
-
-            // Get user notifications for this admin notification
-            const userNotifications = await UserNotification.find({ notificationId })
-                .populate('userId', 'name email')
-                .sort({ deliveredAt: -1 })
-                .limit(10)
-                .lean();
-
-            return {
-                ...notification,
-                recentUserNotifications: userNotifications
-            };
-        } catch (error) {
-            ActivityLogger.logError('ADMIN_NOTIFICATION_DETAILS_ERROR', 'Error fetching notification details', error, { notificationId });
-            throw error;
+        if (!notification) {
+            throw new Error('Notification not found');
         }
+
+        // Get user notification stats
+        const userStats = await UserNotification.aggregate([
+            { $match: { notificationId: new mongoose.Types.ObjectId(notificationId) } },
+            {
+                $group: {
+                    _id: null,
+                    totalUsers: { $sum: 1 },
+                    readUsers: { $sum: { $cond: ['$isRead', 1, 0] } },
+                    deliveredUsers: { $sum: { $cond: [{ $ne: ['$deliveredAt', null] }, 1, 0] } }
+                }
+            }
+        ]);
+
+        notification.userStats = userStats[0] || {
+            totalUsers: 0,
+            readUsers: 0,
+            deliveredUsers: 0
+        };
+
+        return notification;
     }
 
     /**
      * Delete admin notification
      */
     async deleteAdminNotification(notificationId, adminId) {
-        try {
-            const notification = await AdminNotification.findByIdAndDelete(notificationId);
-            
-            if (!notification) {
-                throw new Error('Notification not found');
-            }
-
-            // Delete associated user notifications
-            await UserNotification.deleteMany({ notificationId });
-
-            // Log admin action
-            ActivityLogger.logNotificationAdmin('GLOBAL_NOTIFICATION_DELETED', 'Admin deleted global notification', adminId, {
-                notificationId,
-                title: notification.title,
-                type: notification.type
-            });
-
-            return notification;
-        } catch (error) {
-            ActivityLogger.logError('ADMIN_NOTIFICATION_DELETE_ERROR', 'Error deleting notification', error, { notificationId, adminId });
-            throw error;
+        const notification = await AdminNotification.findByIdAndDelete(notificationId);
+        
+        if (!notification) {
+            throw new Error('Notification not found');
         }
-    }
 
-    /**
-     * Get user notifications inbox
-     */
-    async getUserNotifications(userId, filters = {}) {
-        try {
-            const { page = 1, limit = 20, unreadOnly = false } = filters;
-            
-            const query = { userId };
-            
-            if (unreadOnly) {
-                query.isRead = false;
-            }
+        // Delete associated user notifications
+        await UserNotification.deleteMany({ notificationId });
 
-            const skip = (page - 1) * limit;
+        // Log deletion
+        ActivityLogger.logNotificationAdmin('GLOBAL_NOTIFICATION_DELETED', 'Admin deleted global notification', adminId, {
+            notificationId,
+            title: notification.title,
+            type: notification.type
+        });
 
-            const notifications = await UserNotification.find(query)
-                .populate('notificationId', 'sentAt')
-                .sort({ deliveredAt: -1 })
-                .skip(skip)
-                .limit(limit)
-                .lean();
-
-            const total = await UserNotification.countDocuments(query);
-
-            return {
-                notifications,
-                pagination: {
-                    page,
-                    limit,
-                    total,
-                    pages: Math.ceil(total / limit)
-                }
-            };
-        } catch (error) {
-            ActivityLogger.logError('USER_NOTIFICATIONS_INBOX_ERROR', 'Error fetching user notifications', error, { userId, filters });
-            throw error;
-        }
-    }
-
-    /**
-     * Mark notification as read
-     */
-    async markNotificationAsRead(userId, notificationId) {
-        try {
-            const notification = await UserNotification.findOneAndUpdate(
-                { userId, _id: notificationId },
-                { isRead: true, readAt: new Date() },
-                { new: true }
-            );
-
-            if (!notification) {
-                throw new Error('Notification not found');
-            }
-
-            return notification;
-        } catch (error) {
-            ActivityLogger.logError('MARK_NOTIFICATION_READ_ERROR', 'Error marking notification as read', error, { userId, notificationId });
-            throw error;
-        }
-    }
-
-    /**
-     * Get unread notifications count
-     */
-    async getUnreadNotificationsCount(userId) {
-        try {
-            const count = await UserNotification.countDocuments({
-                userId,
-                isRead: false
-            });
-
-            return { unreadCount: count };
-        } catch (error) {
-            ActivityLogger.logError('UNREAD_COUNT_ERROR', 'Error fetching unread count', error, { userId });
-            throw error;
-        }
-    }
-
-    /**
-     * Add or update FCM token for user
-     */
-    async manageFcmToken(userId, tokenData) {
-        try {
-            const { token, deviceId, platform = 'android' } = tokenData;
-
-            const user = await User.findById(userId);
-            if (!user) {
-                throw new Error('User not found');
-            }
-
-            // Remove existing token for this device
-            user.fcmTokens = user.fcmTokens.filter(
-                t => t.deviceId !== deviceId || t.token !== token
-            );
-
-            // Add new token
-            user.fcmTokens.push({
-                token,
-                deviceId,
-                platform,
-                isActive: true,
-                lastUsedAt: new Date()
-            });
-
-            await user.save();
-
-            return { success: true, message: 'FCM token updated successfully' };
-        } catch (error) {
-            ActivityLogger.logError('FCM_TOKEN_MANAGE_ERROR', 'Error managing FCM token', error, { userId, tokenData });
-            throw error;
-        }
-    }
-
-    /**
-     * Remove FCM token for user
-     */
-    async removeFcmToken(userId, deviceId) {
-        try {
-            const user = await User.findById(userId);
-            if (!user) {
-                throw new Error('User not found');
-            }
-
-            user.fcmTokens = user.fcmTokens.filter(t => t.deviceId !== deviceId);
-            await user.save();
-
-            return { success: true, message: 'FCM token removed successfully' };
-        } catch (error) {
-            ActivityLogger.logError('FCM_TOKEN_REMOVE_ERROR', 'Error removing FCM token', error, { userId, deviceId });
-            throw error;
-        }
+        return notification;
     }
 }
 
